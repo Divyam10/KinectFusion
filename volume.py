@@ -18,7 +18,8 @@ class TSDF():
             self.vox_coords, torch.ones(len(self.vox_coords), 1, )], dim=1).double()
         self.sdf_values = torch.ones(
             (self.vol_dim[0], self.vol_dim[1], self.vol_dim[2])).double()
-
+        self.weights = torch.ones(
+            (self.vol_dim[0], self.vol_dim[1], self.vol_dim[2])).double()
         print(self.vox_coords.shape)
 
     def integrate(self, depth_image, camera_pose, intristics, trunc_value, sdf_trunc):
@@ -51,8 +52,18 @@ class TSDF():
         y_points_valid = y_coords_valid[valid_sdf].int()
         z_points_valid = z_coords_valid[valid_sdf].int()
         valid_dist = dist[valid_sdf]
+        old_sdf = self.sdf_values[x_points_valid, y_points_valid,
+                                  y_points_valid]
+        old_weights = self.weights[x_points_valid, y_points_valid,
+                                        y_points_valid]
+        
         self.sdf_values[x_points_valid, y_points_valid,
-                        y_points_valid] = valid_dist
+                                  y_points_valid] = ((old_weights * old_sdf) + valid_dist)/(old_weights + 1 )
+        
+        self.weights[x_points_valid, y_points_valid,
+                                        y_points_valid] = self.weights[x_points_valid, y_points_valid,
+                                        y_points_valid] +1 
+        
         # depth_values
         # print(pts_camera[2])
         # get gridspace into pixel space.
