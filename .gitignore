@@ -1,0 +1,11 @@
+# Ignore build/cmake directories
+build/
+out/
+# Ignore Python virtual environment directories
+venv/
+# Ignore Obsidian
+*.obsidian
+# Ignore IDEs
+*.vs
+# Ignore local
+local/
