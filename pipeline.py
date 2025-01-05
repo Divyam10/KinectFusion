@@ -58,7 +58,7 @@ def prepare_data(depth_file, rgb_file, trajectory_file):
 
 
 data = prepare_data(depth_file, rgb_file, trajectory_file)
-print(len(data), data[:20])´
+print(len(data), data[:20])
 
 
 
