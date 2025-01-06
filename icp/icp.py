@@ -1,22 +1,59 @@
 import torch
 import torch.nn.functional as F
 
+from pipeline import vertices
+
 
 class ICP(torch.nn.Module):
-    def __init__(self, max_iterations):
+    # TODO: remove max_iterations from here
+    def __init__(self, max_iterations, optimizer, occlusion_threshold):
         super().__init__()
         self.max_iterations = max_iterations
+        self.optimizer = optimizer
+        self.occlusion_threshold = occlusion_threshold
 
-    def forward(self, depth_source, depth_target, pose, K, optimizer):
+    def forward(self, depth_source, depth_target, pose, K):
         vertices_source = self.compute_vertices(depth_source, K)
-        normals_source = self.compute_normals(vertices_source)
 
         vertices_target = self.compute_vertices(depth_target, K)
+        normals_target = self.compute_normals(vertices_target)
 
+        H, W, C = vertices_source.shape
         for i in range(self.max_iterations):
-            # apply projective data association
+            R = pose[:3, :3]
+            t = pose[:3, -1]
+            fx, fy, cx, cy = K[0, 0], K[1, 1], K[0, 2], K[1, 2]
 
-            pose = optimizer()
+            # x̃ = Rx + t
+            vertices_transformed = torch.matmul(vertices_source, R.T) + t
+
+            u_transformed = (vertices_transformed[:, :, 0] / vertices_transformed[:, :, 2]) * fx + cx
+            v_transformed = (vertices_transformed[:, :, 1] / vertices_transformed[:, :, 2]) * fy + cy
+
+            # projective data association
+            vertices_target_warped = self.warp_vertices(vertices_target, u_transformed, v_transformed)
+            normals_target_warped = self.warp_normals(normals_target, u_transformed, v_transformed)
+
+            diff = vertices_transformed - vertices_target_warped
+            # TODO: Experiment with symmetric point to plane error metric
+            residuals = (diff * normals_target_warped).sum(dim=-1)
+
+            Jf = self.compute_jacobian(vertices_transformed, normals_target_warped)
+
+            mask_source = vertices_source[:, :, 2] <= 0
+            mask_target = vertices_target_warped[:, :, 2] <= 0
+            out_of_view_pixels = u_transformed <= 0 | u_transformed >= W-1 | v_transformed <= 0 | v_transformed >= H-1
+            occlusion_mask = diff.norm(p=2, dim=-1) > self.occlusion_threshold
+            mask = mask_source | mask_target | out_of_view_pixels | occlusion_mask
+
+            residuals[mask] = 0.
+            residuals = residuals.view(H*W, -1)
+            Jf[mask] = 0.
+            Jf = Jf.view(H*W, 1, -1)
+
+            parameters_delta = self.optimizer(residuals, Jf)
+
+            pose = self.exp_se3(parameters_delta) @ pose
 
         return pose
 
@@ -30,8 +67,6 @@ class ICP(torch.nn.Module):
         pixel_grid_u.to(device)
         pixel_grid_v.to(device)
 
-        print(pixel_grid_u.shape, pixel_grid_v.shape)
-
         pixel_grid_u = ((pixel_grid_u - cx) / fx) * depth_map
         pixel_grid_v = ((pixel_grid_v - cy) / fy) * depth_map
 
@@ -39,7 +74,7 @@ class ICP(torch.nn.Module):
         return vertices
 
     @staticmethod
-    def compute_normals(self, vertices, normalize_gradients=False):
+    def compute_normals(vertices, normalize_gradients=False):
         H, W, C = vertices.shape
 
         image = vertices.permute(2,0,1).view(C, 1, H, W)
@@ -63,8 +98,65 @@ class ICP(torch.nn.Module):
 
         return normals
 
-    def warp_features(self, feature, u, v, mode="bilinear"):
-        pass
+    @staticmethod
+    def warp_features(feature, u, v, mode="bilinear"):
+        H, W, C = feature.shape
 
+        u_norm = u / ((W - 1) / 2) - 1
+        v_norm = v / ((H - 1) / 2) - 1
+        uv_grid = torch.cat((u_norm.view(1, H, W, 1), v_norm.view(1, H, W, 1)), dim=-1)
 
+        feature_warped = F.grid_sample(feature.unsqueeze(0).permute(0, 3, 1, 2), uv_grid, mode=mode, padding_mode='border', align_corners=True).squeeze()
+        return feature_warped.permute(1, 2, 0)
+
+    @staticmethod
+    def compute_jacobian(vertices_transformed, normals_target_warped):
+        H, W, C = vertices_transformed.shape
+        J_translation = normals_target_warped.view(-1, 3)
+
+        J_rotation = torch.matmul(ICP.generate_3d_skew_symmetric_matrix(vertices_transformed.view(-1, 3)), normals_target_warped.view(-1, 3).unsqueeze(-1)).squeeze(-1)
+
+        Jf = torch.cat((J_rotation, J_translation), dim=-1).view(H, W, -1)
+        return Jf
+
+    @staticmethod
+    def generate_3d_skew_symmetric_matrix(vector):
+        v1, v2, v3 = vector[:, 0], vector[:, 1], vector[:, 2]
+        o = torch.zeros_like(v1)
+
+        skew_symmetric_matrix = torch.tensor([[o, -v3, v2], [v3, o, -v1], [-v2, v1, o]]).permute(2, 0, 1)
+        return skew_symmetric_matrix
+
+    @staticmethod
+    def exp_se3(xi):
+        eps = 1e-8
+
+        w = xi[:3].squeeze()
+        v = xi[3:6].squeeze()
+        w_hat = torch.tensor([[0., -w[2], w[1]],
+                              [w[2], 0., -w[0]],
+                              [-w[1], w[0], 0.]]).to(xi)
+        w_hat_second = torch.mm(w_hat, w_hat).to(xi)
+
+        theta = torch.norm(w)
+        theta_2 = theta ** 2
+        theta_3 = theta ** 3
+        sin_theta = torch.sin(theta)
+        cos_theta = torch.cos(theta)
+        eye_3 = torch.eye(3).to(xi)
+
+        if theta <= eps:
+            e_w = eye_3
+            j = eye_3
+        else:
+            e_w = eye_3 + w_hat * sin_theta / theta + w_hat_second * (1. - cos_theta) / theta_2
+            k1 = (1 - cos_theta) / theta_2
+            k2 = (theta - sin_theta) / theta_3
+            j = eye_3 + k1 * w_hat + k2 * w_hat_second
+
+        T = torch.eye(4).to(xi)
+        T[:3, :3] = e_w
+        T[:3, 3] = torch.mv(j, v)
+
+        return T
 
