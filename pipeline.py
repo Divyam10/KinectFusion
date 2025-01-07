@@ -2,7 +2,7 @@ import os
 import numpy as np
 import torch
 import imageio.v3 as iio
-
+import cv2
 
 DATA_DIR = 'data/rgbd_dataset_freiburg1_desk'
 DATA_PATH = os.path.join(os.getcwd(), DATA_DIR)
@@ -11,12 +11,19 @@ depth_file = os.path.join(DATA_PATH, 'depth.txt')
 rgb_file = os.path.join(DATA_PATH, 'rgb.txt')
 trajectory_file = os.path.join(DATA_PATH, 'groundtruth.txt')
 
+if torch.cuda.is_available():
+    device = torch.device("cuda")
+elif torch.backends.mps.is_available():
+    device = torch.device("mps")
+else:
+    device = torch.device("cpu")
+
 # define allowed range of depth values in meters
 d_max = 3
 d_min = 0.25
 
 fx, fy, cx, cy = 517.3, 516.5, 318.6, 255.3
-K = torch.tensor([[fx, 0, cx], [0, fy, cy], [0, 0, 1]])
+K = torch.tensor([[fx, 0, cx], [0, fy, cy], [0, 0, 1]]).to(device)
 
 
 def read_data_file(file):
@@ -66,40 +73,95 @@ def prepare_data(depth_file, rgb_file, trajectory_file):
     return combined_data
 
 
+def quaternion_to_matrix(quaternions: torch.Tensor) -> torch.Tensor:
+    """
+    Convert rotations given as quaternions to rotation matrices.
+
+    Args:
+        quaternions: quaternions with real part first,
+            as tensor of shape (..., 4).
+
+    Returns:
+        Rotation matrices as tensor of shape (..., 3, 3).
+    """
+    qw, qx, qy, qz = torch.unbind(quaternions, -1)
+    two_s = 2.0 / (quaternions * quaternions).sum(-1)
+
+    o = torch.stack(
+        (
+            1 - two_s * (qy * qy + qz * qz),
+            two_s * (qx * qy - qz * qw),
+            two_s * (qx * qz + qy * qw),
+            two_s * (qx * qy + qz * qw),
+            1 - two_s * (qx * qx + qz * qz),
+            two_s * (qy * qz - qx * qw),
+            two_s * (qx * qz - qy * qw),
+            two_s * (qy * qz + qx * qw),
+            1 - two_s * (qx * qx + qy * qy),
+        ),
+        -1,
+    )
+    return o.reshape(quaternions.shape[:-1] + (3, 3))
+
+
+def load_K_Rt_from_P(P):
+    """
+    modified from IDR https://github.com/lioryariv/idr
+    """
+    P = P.detach().cpu().numpy()
+    out = cv2.decomposeProjectionMatrix(P)
+    K = out[0]
+    R = out[1]
+    t = out[2]
+
+    K = K/K[2,2]
+    intrinsics = np.eye(4)
+    intrinsics[:3, :3] = K
+
+    pose = np.eye(4, dtype=np.float32)
+    pose[:3, :3] = R.transpose()  # convert from w2c to c2w
+    pose[:3, 3] = (t[:3] / t[3])[:, 0]
+
+    return intrinsics, pose
+
+
+def read_data(data, index):
+    assert index < len(data)
+
+    depth = iio.imread(os.path.join(DATA_PATH, data[index]["data"][0])).astype(np.float32)
+    depth /= 5000
+    depth[(depth < d_min) | (depth > d_max)] = 0
+    depth = torch.from_numpy(depth).to(device)
+
+    rgb = iio.imread(os.path.join(DATA_PATH, data[0]["data"][8])).astype(np.float32)
+    rgb = torch.from_numpy(rgb).to(device)
+
+    trajectories = list(map(float, data[index]["data"][1:8]))
+    trajectories = torch.tensor(trajectories, dtype=torch.float32).to(device)
+
+    # qx, qy, qz, qw -> qw, qx, qy, qz
+    trajectories[[3, 4, 5, 6]] = trajectories[[6, 3, 4, 5]]
+    R = quaternion_to_matrix(trajectories[3:])
+    c = trajectories[:3]
+    w2c = torch.eye(4).to(device)
+    w2c[:3, :3] = R
+    w2c[:3, 3] = c
+    w2c = torch.linalg.inv(w2c)
+
+    my_c2w = torch.eye(4).to(device)
+    my_c2w[:3, :3] = R
+    my_c2w[:3, 3] = c
+
+    return depth, rgb, w2c, my_c2w
+
+
 data = prepare_data(depth_file, rgb_file, trajectory_file)
 print(len(data), data[:20])
 
-depth = iio.imread(os.path.join(DATA_PATH, data[0]["data"][0])).astype(np.float32)
+depth, rgb, w2c, my_c2w = read_data(data, 0)
+P = K @ w2c[:3, :]
 
-# Rescale depth to meters (https://cvg.cit.tum.de/data/datasets/rgbd-dataset/file_formats#intrinsic_camera_calibration_of_the_kinect)
-depth /= 5000
-print(depth.max(), depth.min())
-depth[(depth < d_min) | (depth > d_max)] = 0
-print(type(depth), depth.shape, depth.dtype)
-
-rgb = iio.imread(os.path.join(DATA_PATH, data[0]["data"][8])).astype(np.float32)
-print(type(rgb), rgb.shape, rgb.dtype)
+intrinsics, c2w = load_K_Rt_from_P(P)
 
 
-depth = torch.from_numpy(depth)
 
-def compute_vertices(depth_map, K):
-    H, W = depth_map.shape
-    device = depth_map.device
-    fx, fy, cx, cy = K[0, 0], K[1, 1], K[0, 2], K[1, 2]
-
-    pixel_grid_v, pixel_grid_u = torch.meshgrid([torch.arange(0, W), torch.arange(0, H)], indexing="xy")
-    pixel_grid_u.to(device)
-    pixel_grid_v.to(device)
-
-    print(pixel_grid_u.shape, pixel_grid_v.shape)
-
-    pixel_grid_u = ((pixel_grid_u - cx) / fx) * depth_map
-    pixel_grid_v = ((pixel_grid_v - cy) / fy) * depth_map
-
-    vertices = torch.stack((pixel_grid_u, pixel_grid_v, depth_map), dim=2)
-    return vertices
-
-vertices = compute_vertices(depth, K)
-print(vertices.shape, vertices.dtype)
-print(vertices[155, 155, :])
