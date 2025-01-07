@@ -2,7 +2,10 @@ import os
 import numpy as np
 import torch
 import imageio.v3 as iio
-import cv2
+
+from icp.levenberg_marquardt import LM_optimizer
+from icp.icp import ICP
+
 
 DATA_DIR = 'data/rgbd_dataset_freiburg1_desk'
 DATA_PATH = os.path.join(os.getcwd(), DATA_DIR)
@@ -17,6 +20,7 @@ elif torch.backends.mps.is_available():
     device = torch.device("mps")
 else:
     device = torch.device("cpu")
+device = torch.device("cpu")
 
 # define allowed range of depth values in meters
 d_max = 3
@@ -104,25 +108,25 @@ def quaternion_to_matrix(quaternions: torch.Tensor) -> torch.Tensor:
     return o.reshape(quaternions.shape[:-1] + (3, 3))
 
 
-def load_K_Rt_from_P(P):
-    """
-    modified from IDR https://github.com/lioryariv/idr
-    """
-    P = P.detach().cpu().numpy()
-    out = cv2.decomposeProjectionMatrix(P)
-    K = out[0]
-    R = out[1]
-    t = out[2]
-
-    K = K/K[2,2]
-    intrinsics = np.eye(4)
-    intrinsics[:3, :3] = K
-
-    pose = np.eye(4, dtype=np.float32)
-    pose[:3, :3] = R.transpose()  # convert from w2c to c2w
-    pose[:3, 3] = (t[:3] / t[3])[:, 0]
-
-    return intrinsics, pose
+# def load_K_Rt_from_P(P):
+#     """
+#     modified from IDR https://github.com/lioryariv/idr
+#     """
+#     P = P.detach().cpu().numpy()
+#     out = cv2.decomposeProjectionMatrix(P)
+#     K = out[0]
+#     R = out[1]
+#     t = out[2]
+#
+#     K = K/K[2,2]
+#     intrinsics = np.eye(4)
+#     intrinsics[:3, :3] = K
+#
+#     pose = np.eye(4, dtype=np.float32)
+#     pose[:3, :3] = R.transpose()  # convert from w2c to c2w
+#     pose[:3, 3] = (t[:3] / t[3])[:, 0]
+#
+#     return intrinsics, pose
 
 
 def read_data(data, index):
@@ -143,25 +147,32 @@ def read_data(data, index):
     trajectories[[3, 4, 5, 6]] = trajectories[[6, 3, 4, 5]]
     R = quaternion_to_matrix(trajectories[3:])
     c = trajectories[:3]
-    w2c = torch.eye(4).to(device)
-    w2c[:3, :3] = R
-    w2c[:3, 3] = c
-    w2c = torch.linalg.inv(w2c)
+    # w2c = torch.eye(4).to(device)
+    # w2c[:3, :3] = R
+    # w2c[:3, 3] = c
+    # w2c = torch.linalg.inv(w2c)
+    #
+    # my_c2w = torch.eye(4).to(device)
+    # my_c2w[:3, :3] = R
+    # my_c2w[:3, 3] = c
 
-    my_c2w = torch.eye(4).to(device)
-    my_c2w[:3, :3] = R
-    my_c2w[:3, 3] = c
+    c2w = torch.eye(4).to(device)
+    c2w[:3, :3] = R
+    c2w[:3, 3] = c
 
-    return depth, rgb, w2c, my_c2w
+    return depth, rgb, c2w
 
 
 data = prepare_data(depth_file, rgb_file, trajectory_file)
 print(len(data), data[:20])
 
-depth, rgb, w2c, my_c2w = read_data(data, 0)
-P = K @ w2c[:3, :]
+optimizer = LM_optimizer()
+icp = ICP(max_iterations=10, optimizer=optimizer)
 
-intrinsics, c2w = load_K_Rt_from_P(P)
+depth, rgb, c2w = read_data(data, 0)
 
+depth1, rgb1, c2w1 = read_data(data, 1)
+T10 = icp(depth1, depth, torch.eye(4).to(device), K)
 
-
+res = c2w @ T10
+print(c2w1, res, sep="\n")
