@@ -4,6 +4,7 @@ import cv2
 import glob
 import open3d as o3d
 from skimage import measure
+from scipy.interpolate import RegularGridInterpolator
 
 
 def rigid_transform(xyz, transform):
@@ -129,6 +130,7 @@ class TSDF():
 
         self.weights[x_points_valid, y_points_valid,
                      z_points_valid] = self.weights[x_points_valid, y_points_valid, z_points_valid] + 1
+    
 
 
         return 0
@@ -182,18 +184,40 @@ if __name__ == "__main__":
         vox_grid.integrate(depth_im, cam_pose, cam_intr, img)
 
     sdf_numpy = vox_grid.sdf_values.numpy()
+    color_sdf = vox_grid.rgb_values.numpy()
     voxel_size = 0.02
     
 
     verts, faces, norms, vals = measure.marching_cubes(sdf_numpy, level=0)
     verts_ind = np.round(verts).astype(int)
-    verts = verts*voxel_size + vox_grid._vol_origin
+    verts = verts*voxel_size 
+    # verts = verts*voxel_size + vox_grid._vol_origin
 
+
+
+    y = np.arange(color_sdf.shape[1]) * voxel_size
+    x = np.arange(color_sdf.shape[0]) * voxel_size
+    z = np.arange(color_sdf.shape[2]) * voxel_size
+
+    # Create interpolators for each color channel (R, G, B)
+    r_interpolator = RegularGridInterpolator((x, y, z), color_sdf[..., 0])
+    g_interpolator = RegularGridInterpolator((x, y, z), color_sdf[..., 1])
+    b_interpolator = RegularGridInterpolator((x, y, z), color_sdf[..., 2])
+
+    # Interpolate the colors for the vertices
+    r_values = r_interpolator(verts)
+    g_values = g_interpolator(verts)
+    b_values = b_interpolator(verts)
+
+    # Combine interpolated RGB values
+    vertex_colors = np.stack((b_values, g_values, r_values), axis=-1)
 
 
     mesh = o3d.geometry.TriangleMesh()
     mesh.vertices = o3d.utility.Vector3dVector(verts)
     mesh.triangles = o3d.utility.Vector3iVector(faces)
     mesh.compute_vertex_normals()
+    mesh.vertex_colors = o3d.utility.Vector3dVector(vertex_colors / 255.0)  # Normalize RGB to [0, 1]
+
 
     o3d.visualization.draw_geometries([mesh])
