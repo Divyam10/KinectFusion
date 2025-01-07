@@ -1,8 +1,6 @@
 import torch
 import torch.nn.functional as F
 
-from pipeline import vertices
-
 
 class ICP(torch.nn.Module):
     # TODO: remove max_iterations from here
@@ -47,13 +45,13 @@ class ICP(torch.nn.Module):
             mask = mask_source | mask_target | out_of_view_pixels | occlusion_mask
 
             residuals[mask] = 0.
-            residuals = residuals.view(H*W, -1)
+            residuals = residuals.view(H*W, -1, -1)
             Jf[mask] = 0.
             Jf = Jf.view(H*W, 1, -1)
 
-            parameters_delta = self.optimizer(residuals, Jf)
+            delta_parameters = self.optimizer(residuals, Jf)
 
-            pose = self.exp_se3(parameters_delta) @ pose
+            pose = self.exp_se3(delta_parameters) @ pose
 
         return pose
 
