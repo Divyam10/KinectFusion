@@ -1,5 +1,7 @@
 import os
+import time
 import numpy as np
+import matplotlib.pyplot as plt
 import torch
 import imageio.v3 as iio
 import open3d as o3d
@@ -24,11 +26,20 @@ else:
 device = torch.device("cpu")
 
 # define allowed range of depth values in meters
-d_max = 3
+d_max = 5
 d_min = 0.25
 
 fx, fy, cx, cy = 517.3, 516.5, 318.6, 255.3
 K = torch.tensor([[fx, 0, cx], [0, fy, cy], [0, 0, 1]]).to(device)
+
+
+def get_time():
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+    elif torch.backends.mps.is_available():
+        torch.mps.synchronize()
+
+    return time.time()
 
 
 def read_data_file(file):
@@ -182,34 +193,69 @@ def plot_3d_figure(point_cloud, normals, colors_np):
 
 
 data = prepare_data(depth_file, rgb_file, trajectory_file)
-print(len(data), data[:20])
-
 optimizer = LM_optimizer()
-icp = ICP(max_iterations=10, optimizer=optimizer, symmetric_error=True)
+icp = ICP(max_iterations=5, optimizer=optimizer, symmetric_error=True)
 
 depth, rgb, c2w = read_data(data, 0)
-
-depth1, rgb1, c2w1 = read_data(data, 1)
-T10 = icp(depth1, depth, torch.eye(4).to(device), K)
-
-res = c2w @ T10
-print(c2w1, res, sep="\n")
-
 H, W = depth.shape
 
 vertices = ICP.compute_vertices(depth, K)
 normals = ICP.compute_normals(vertices)
 colors = np.array([1, 0, 0]).reshape(1, 3).repeat(H*W, axis=0)
+
+R = c2w[:3, :3]
+t = c2w[:3, -1]
+vertices = torch.matmul(vertices, R.T) + t
 pcd = plot_3d_figure(vertices, normals, colors)
+
+time_list, c2w_list, c2w_gt_list = list(), list(), list()
+for i in range(1, len(data[:100])):
+    depth1, rgb1, c2w1 = read_data(data, i)
+    t0 = get_time()
+
+    T10 = icp(depth1, depth, torch.eye(4).to(device), K)
+
+    c2w = c2w @ T10
+
+    t1 = get_time()
+    time_list += [t1 - t0]
+    print("processed frame: {:d}, time taken: {:f}s".format(i, t1 - t0))
+
+    depth = depth1
+
+    c2w_list += [c2w.cpu().numpy()]
+    c2w_gt_list += [c2w1.cpu().numpy()]
+
+avg_time = np.array(time_list).mean()
+print("average processing time: {:f}s per frame, i.e. {:f} fps".format(avg_time, 1. / avg_time))
+
+c2w_gt_list = np.stack(c2w_gt_list, 0)
+c2w_list = np.stack(c2w_list, 0)
+traj_gt = np.array(c2w_gt_list)[:, :3, 3]
+traj = np.array(c2w_list)[:, :3, 3]
+print(c2w_gt_list[-1])
+print(c2w_list[-1])
+plt.figure(figsize=(10, 6))
+plt.plot(traj_gt[:, 0], traj_gt[:, 1], label="Ground Truth", color="blue")
+plt.plot(traj[:, 0], traj[:, 1], label="Estimated", color="red", linestyle="--")
+plt.legend()
+plt.title("Trajectory Comparison")
+plt.xlabel("X")
+plt.ylabel("Y")
+plt.grid()
+plt.show()
+
+rmse = np.sqrt(np.mean(np.linalg.norm(traj_gt - traj, axis=-1) ** 2))
+print("RMSE: {:f}".format(rmse))
+
 
 vertices1 = ICP.compute_vertices(depth1, K)
 normals1 = ICP.compute_normals(vertices1)
 colors1 = np.array([0, 0, 1]).reshape(1, 3).repeat(H*W, axis=0)
 
-R = T10[:3, :3]
-t = T10[:3, -1]
+R = c2w[:3, :3]
+t = c2w[:3, -1]
 vertices1 = torch.matmul(vertices1, R.T) + t
-
 pcd1 = plot_3d_figure(vertices1, normals1, colors1)
 
 o3d.visualization.draw_geometries([pcd, pcd1], point_show_normal=False)

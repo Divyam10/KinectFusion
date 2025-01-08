@@ -6,10 +6,6 @@ class LM_optimizer(torch.nn.Module):
         self.damping_factor = damping_factor
 
     def forward(self, residuals, Jf):
-        valid_mask = ~torch.isnan(Jf)
-        print(torch.max(Jf[valid_mask]))
-        print("Jf:", Jf.view(-1)[30000:30100])
-        print("Jf:", Jf.view(-1)[90000:90100])
         Jt = Jf.transpose(-1, -2)
 
         Jtj = torch.bmm(Jt, Jf)
@@ -21,7 +17,6 @@ class LM_optimizer(torch.nn.Module):
         diagJtj = torch.diagonal(Jtj)
         epsilon = self.damping_factor * diagJtj
         Hessian = Jtj + torch.diag(epsilon)
-        print("Hessian:", Hessian)
 
         # TODO: Add exception handling for cholesky (torch._C._LinAlgError: linalg.cholesky: The factorization could not be completed because the input is not positive-definite (t)
         # Linear solver for H @ xi = -Jtr

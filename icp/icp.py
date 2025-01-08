@@ -3,7 +3,6 @@ import torch.nn.functional as F
 
 
 class ICP(torch.nn.Module):
-    # TODO: remove max_iterations from here
     def __init__(self, max_iterations=10, optimizer=None, occlusion_threshold=0.1, symmetric_error=False):
         super().__init__()
         self.max_iterations = max_iterations
@@ -12,8 +11,6 @@ class ICP(torch.nn.Module):
         self.symmetric_error = symmetric_error
 
     def forward(self, depth_source, depth_target, pose, K):
-        # print(depth_source.view(-1)[90000:91000])
-        # print(depth_target.view(-1)[90000:91000])
         vertices_source = self.compute_vertices(depth_source, K)
         if self.symmetric_error:
             normals_source = self.compute_normals(vertices_source)
@@ -35,21 +32,16 @@ class ICP(torch.nn.Module):
 
             u_transformed = (vertices_transformed[:, :, 0] / vertices_transformed[:, :, 2]) * fx + cx
             v_transformed = (vertices_transformed[:, :, 1] / vertices_transformed[:, :, 2]) * fy + cy
-            print(vertices_transformed[:, :, 0].view(-1)[30000], vertices_transformed[:, :, 1].view(-1)[30000], vertices_transformed[:, :, 2].view(-1)[30000])
-            print(u_transformed.view(-1)[30000:30100])
-            print(v_transformed.view(-1)[30000:30100])
-
 
             # projective data association
-            vertices_target_warped = self.warp_features(vertices_target, u_transformed, v_transformed)
-            normals_target_warped = self.warp_features(normals_target, u_transformed, v_transformed)
-            print(vertices_target_warped.shape, vertices_target_warped.dtype)
-            valid_mask = ~torch.isnan(vertices_target_warped)
-            print(torch.max(vertices_target_warped[valid_mask]))
-            print(vertices_target_warped.reshape(-1)[80000:80100])
-            valid_mask = ~torch.isnan(normals_target_warped)
-            print(torch.max(normals_target_warped[valid_mask]))
-            print(normals_target_warped.reshape(-1)[80000:80100])
+            u_norm = u_transformed / ((W - 1) / 2) - 1
+            v_norm = v_transformed / ((H - 1) / 2) - 1
+            # u_norm, v_norm = u_transformed, v_transformed
+
+            uv_grid = torch.cat((u_norm.view(1, H, W, 1), v_norm.view(1, H, W, 1)), dim=-1)
+
+            vertices_target_warped = self.warp_features(vertices_target, uv_grid)
+            normals_target_warped = self.warp_features(normals_target, uv_grid)
 
             normals = normals_target_warped
             if self.symmetric_error:
@@ -57,14 +49,9 @@ class ICP(torch.nn.Module):
                 normals = F.normalize(normals, p=2, dim=-1)
 
             diff = vertices_transformed - vertices_target_warped
-            print("diff:", diff.view(-1)[90000:90100])
-            # TODO: Experiment with symmetric point to plane error metric
             residuals = (diff * normals).sum(dim=-1)
-            print("residuals:", residuals.view(-1)[90000:90100])
 
             Jf = self.compute_jacobian(vertices_transformed, normals)
-            valid_mask = ~torch.isnan(Jf)
-            print("Jf:", torch.max(Jf[valid_mask]))
 
             mask_source = vertices_source[:, :, 2] <= 0
             mask_target = vertices_target_warped[:, :, 2] <= 0
@@ -75,16 +62,12 @@ class ICP(torch.nn.Module):
             residuals[mask] = 0.
             residuals = residuals.view(H*W, 1, 1)
 
-            temp = residuals.view(-1)
-            temp = temp.dot(temp)
-            print("loss:", temp, torch.linalg.norm(residuals))
+            # print("loss:", torch.linalg.norm(residuals))
+
             Jf[mask] = 0.
-            valid_mask = ~torch.isnan(Jf)
-            print("Jf:", torch.max(Jf[valid_mask]))
             Jf = Jf.view(H*W, 1, -1)
 
             delta_parameters = self.optimizer(residuals, Jf)
-            print("delta_parameters:", delta_parameters)
 
             pose = self.exp_se3(delta_parameters) @ pose
 
@@ -132,32 +115,29 @@ class ICP(torch.nn.Module):
         return normals
 
     @staticmethod
-    def warp_features(feature, u, v, mode="bilinear"):
-        H, W, C = feature.shape
+    def warp_features(feature, uv_grid, mode="bilinear"):
+        device = feature.device
 
-        u_norm = u / ((W - 1) / 2) - 1
-        v_norm = v / ((H - 1) / 2) - 1
-        uv_grid = torch.cat((u_norm.view(1, H, W, 1), v_norm.view(1, H, W, 1)), dim=-1)
+        # mps does not yet support F.grid_sample(), it produces a lot of NaNs
+        if device.type == "mps":
+            uv_grid = uv_grid.detach().cpu()
+            feature = feature.detach().cpu()
 
         padding_mode = "border"
-        if u.device.type == "mps":
-            # https://github.com/pytorch/pytorch/issues/125098
-            padding_mode = "zeros"
-            uv_grid = uv_grid.clamp(-1, 1)
-        print(uv_grid.shape)
+        # if uv_grid.device.type == "mps":
+        #     # https://github.com/pytorch/pytorch/issues/125098
+        #     padding_mode = "zeros"
+        #     uv_grid = uv_grid.clamp(-1, 1)
+
         feature_warped = F.grid_sample(feature.unsqueeze(0).permute(0, 3, 1, 2), uv_grid, mode=mode, padding_mode=padding_mode, align_corners=True).squeeze()
-        return feature_warped.permute(1, 2, 0)
+        return feature_warped.permute(1, 2, 0).to(device)
 
     @staticmethod
     def compute_jacobian(vertices_transformed, normals_target_warped):
         H, W, C = vertices_transformed.shape
         J_translation = normals_target_warped.view(-1, 3)
-        valid_mask = ~torch.isnan(J_translation)
-        print("J_translation:", torch.max(J_translation[valid_mask]))
 
         J_rotation = torch.matmul(ICP.generate_3d_skew_symmetric_matrix(vertices_transformed.view(-1, 3)), normals_target_warped.view(-1, 3).unsqueeze(-1)).squeeze(-1)
-        valid_mask = ~torch.isnan(J_rotation)
-        print("J_rotation:", torch.max(J_rotation[valid_mask]))
 
         Jf = torch.cat((J_rotation, J_translation), dim=-1).view(H, W, -1)
         return Jf
@@ -167,9 +147,7 @@ class ICP(torch.nn.Module):
         v1, v2, v3 = vector[:, 0], vector[:, 1], vector[:, 2]
         o = torch.zeros_like(v1)
 
-        # skew_symmetric_matrix = torch.tensor([[o, -v3, v2], [v3, o, -v1], [-v2, v1, o]]).permute(2, 0, 1)
         skew_symmetric_matrix = torch.stack([torch.stack([o, -v3, v2]), torch.stack([v3, o, -v1]), torch.stack([-v2, v1, o])]).permute(2, 0, 1)
-        print(skew_symmetric_matrix.shape)
         return skew_symmetric_matrix
 
     @staticmethod
