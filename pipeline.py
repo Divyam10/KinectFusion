@@ -2,6 +2,7 @@ import os
 import numpy as np
 import torch
 import imageio.v3 as iio
+import open3d as o3d
 
 from icp.levenberg_marquardt import LM_optimizer
 from icp.icp import ICP
@@ -162,12 +163,29 @@ def read_data(data, index):
 
     return depth, rgb, c2w
 
+def plot_3d_figure(point_cloud, normals, colors_np):
+    point_cloud_np = point_cloud.view(-1, 3).cpu().numpy()
+    normals_np = normals.view(-1, 3).cpu().numpy()
+    # colors_np = colors_np.view(-1, 3).cpu().numpy()
+
+    # Normalize colors (ensure they are in range [0, 1])
+    if colors_np.max() > 1.0:
+        colors_np = colors_np / 255.0
+
+    pcd = o3d.geometry.PointCloud()
+
+    pcd.points = o3d.utility.Vector3dVector(point_cloud_np)
+    pcd.normals = o3d.utility.Vector3dVector(normals_np)
+    pcd.colors = o3d.utility.Vector3dVector(colors_np)
+
+    return pcd
+
 
 data = prepare_data(depth_file, rgb_file, trajectory_file)
 print(len(data), data[:20])
 
 optimizer = LM_optimizer()
-icp = ICP(max_iterations=10, optimizer=optimizer)
+icp = ICP(max_iterations=10, optimizer=optimizer, symmetric_error=True)
 
 depth, rgb, c2w = read_data(data, 0)
 
@@ -176,3 +194,22 @@ T10 = icp(depth1, depth, torch.eye(4).to(device), K)
 
 res = c2w @ T10
 print(c2w1, res, sep="\n")
+
+H, W = depth.shape
+
+vertices = ICP.compute_vertices(depth, K)
+normals = ICP.compute_normals(vertices)
+colors = np.array([1, 0, 0]).reshape(1, 3).repeat(H*W, axis=0)
+pcd = plot_3d_figure(vertices, normals, colors)
+
+vertices1 = ICP.compute_vertices(depth1, K)
+normals1 = ICP.compute_normals(vertices1)
+colors1 = np.array([0, 0, 1]).reshape(1, 3).repeat(H*W, axis=0)
+
+R = T10[:3, :3]
+t = T10[:3, -1]
+vertices1 = torch.matmul(vertices1, R.T) + t
+
+pcd1 = plot_3d_figure(vertices1, normals1, colors1)
+
+o3d.visualization.draw_geometries([pcd, pcd1], point_show_normal=False)

@@ -4,16 +4,19 @@ import torch.nn.functional as F
 
 class ICP(torch.nn.Module):
     # TODO: remove max_iterations from here
-    def __init__(self, max_iterations=10, optimizer=None, occlusion_threshold=0.1):
+    def __init__(self, max_iterations=10, optimizer=None, occlusion_threshold=0.1, symmetric_error=False):
         super().__init__()
         self.max_iterations = max_iterations
         self.optimizer = optimizer
         self.occlusion_threshold = occlusion_threshold
+        self.symmetric_error = symmetric_error
 
     def forward(self, depth_source, depth_target, pose, K):
         # print(depth_source.view(-1)[90000:91000])
         # print(depth_target.view(-1)[90000:91000])
         vertices_source = self.compute_vertices(depth_source, K)
+        if self.symmetric_error:
+            normals_source = self.compute_normals(vertices_source)
 
         vertices_target = self.compute_vertices(depth_target, K)
         normals_target = self.compute_normals(vertices_target)
@@ -25,7 +28,10 @@ class ICP(torch.nn.Module):
             fx, fy, cx, cy = K[0, 0], K[1, 1], K[0, 2], K[1, 2]
 
             # x̃ = Rx + t
+            # ñ = Rn
             vertices_transformed = torch.matmul(vertices_source, R.T) + t
+            if self.symmetric_error:
+                normals_transformed = torch.matmul(normals_source, R.T)
 
             u_transformed = (vertices_transformed[:, :, 0] / vertices_transformed[:, :, 2]) * fx + cx
             v_transformed = (vertices_transformed[:, :, 1] / vertices_transformed[:, :, 2]) * fy + cy
@@ -45,13 +51,18 @@ class ICP(torch.nn.Module):
             print(torch.max(normals_target_warped[valid_mask]))
             print(normals_target_warped.reshape(-1)[80000:80100])
 
+            normals = normals_target_warped
+            if self.symmetric_error:
+                normals += normals_transformed
+                normals = F.normalize(normals, p=2, dim=-1)
+
             diff = vertices_transformed - vertices_target_warped
             print("diff:", diff.view(-1)[90000:90100])
             # TODO: Experiment with symmetric point to plane error metric
-            residuals = (diff * normals_target_warped).sum(dim=-1)
+            residuals = (diff * normals).sum(dim=-1)
             print("residuals:", residuals.view(-1)[90000:90100])
 
-            Jf = self.compute_jacobian(vertices_transformed, normals_target_warped)
+            Jf = self.compute_jacobian(vertices_transformed, normals)
             valid_mask = ~torch.isnan(Jf)
             print("Jf:", torch.max(Jf[valid_mask]))
 
@@ -66,7 +77,7 @@ class ICP(torch.nn.Module):
 
             temp = residuals.view(-1)
             temp = temp.dot(temp)
-            print("loss:", temp)
+            print("loss:", temp, torch.linalg.norm(residuals))
             Jf[mask] = 0.
             valid_mask = ~torch.isnan(Jf)
             print("Jf:", torch.max(Jf[valid_mask]))
@@ -113,7 +124,7 @@ class ICP(torch.nn.Module):
             img_dy = img_dy / mag
 
         normals = torch.linalg.cross(img_dx, img_dy)
-        normals = normals / (torch.norm(normals, p=2, dim=-1, keepdim=True) + 1e-8)
+        normals = F.normalize(normals, p=2, dim=-1)
 
         vertex_depths = vertices[:, :, -1]
         normals[vertex_depths==0] = 0

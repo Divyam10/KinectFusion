@@ -23,6 +23,7 @@ class LM_optimizer(torch.nn.Module):
         Hessian = Jtj + torch.diag(epsilon)
         print("Hessian:", Hessian)
 
+        # TODO: Add exception handling for cholesky (torch._C._LinAlgError: linalg.cholesky: The factorization could not be completed because the input is not positive-definite (t)
         # Linear solver for H @ xi = -Jtr
         if Hessian.device.type == 'mps':
             Hessian = Hessian.to("cpu")
