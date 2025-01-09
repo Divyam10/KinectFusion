@@ -5,7 +5,12 @@ import glob
 import open3d as o3d
 from skimage import measure
 from scipy.interpolate import RegularGridInterpolator
-
+from mpl_toolkits import mplot3d
+import numpy as np
+import matplotlib
+matplotlib.use('TkAgg') 
+import matplotlib.pyplot as plt
+import time
 
 def rigid_transform(xyz, transform):
   """Applies a rigid transform to an (N, 3) pointcloud.
@@ -30,7 +35,7 @@ def get_view_frustum(depth_im, cam_intr, cam_pose):
 
 class TSDF():
 
-    def __init__(self, vol_dim, voxel_size=0.01):
+    def __init__(self, vol_dim, intristics, voxel_size=0.01):
 
         # self.vol_dim = vol_dim
         self._vol_bnds = vol_dim
@@ -44,6 +49,13 @@ class TSDF():
         self._vol_dim[0], self._vol_dim[1], self._vol_dim[2],
         self._vol_dim[0]*self._vol_dim[1]*self._vol_dim[2])
         )
+
+
+        self.fx = intristics[0][0]
+        self.fy = intristics[1][1]
+        self.cx = intristics[0][2]
+        self.cy = intristics[1][2]
+
             
         x_grid = torch.arange(0, self._vol_dim[0])
         y_grid = torch.arange(0, self._vol_dim[1])
@@ -53,87 +65,117 @@ class TSDF():
             [xv.flatten(), yv.flatten(), zv.flatten()], dim=1).double()
 
         self.vox_Wcoords = torch.cat([
-            (self.vox_coords * voxel_size) + self._vol_origin, torch.ones(len(self.vox_coords), 1, )], dim=1).double()
+            (self.vox_coords * voxel_size) + self._vol_origin, torch.ones(len(self.vox_coords), 1, )], dim=1).double().cuda()
 
         self.vox_coords = torch.cat([
-            self.vox_coords, torch.ones(len(self.vox_coords), 1, )], dim=1).double()
+            self.vox_coords, torch.ones(len(self.vox_coords), 1, )], dim=1).double().cuda()
 
         self.sdf_values = torch.ones(
-            (self._vol_dim[0], self._vol_dim[1], self._vol_dim[2])).double()
+            (self._vol_dim[0], self._vol_dim[1], self._vol_dim[2])).double().cuda()
         
 
         self.rgb_values = torch.zeros(
-            (self._vol_dim[0], self._vol_dim[1], self._vol_dim[2], 3)).double()
+            (self._vol_dim[0], self._vol_dim[1], self._vol_dim[2], 3)).double().cuda()
         
         self.weights = torch.zeros(
-            (self._vol_dim[0], self._vol_dim[1], self._vol_dim[2])).double()
+            (self._vol_dim[0], self._vol_dim[1], self._vol_dim[2])).double().cuda()
 
-    def integrate(self, depth_image, camera_pose, intristics, color_img, sdf_trunc=0.03):
+    def integrate(self, depth_image, camera_pose, color_img, sdf_trunc=0.03):
 
-        world2cam = torch.inverse(torch.from_numpy(camera_pose))
-        # print(torch.inverse(torch.from_numpy(camera_pose)))
-        pts_camera = torch.matmul(
-            world2cam, torch.t(self.vox_Wcoords))
-        z_points = pts_camera[2]
-        fx = intristics[0][0]
-        fy = intristics[1][1]
-        cx = intristics[0][2]
-        cy = intristics[1][2]
+        with torch.no_grad():
 
-
-        x_pix = torch.round((pts_camera[0] * fx)/z_points + cx).long()
-        y_pix = torch.round((pts_camera[1] * fy)/z_points + cy).long()
+            world2cam = torch.inverse(torch.from_numpy(camera_pose)).cuda()
+            # print(torch.inverse(torch.from_numpy(camera_pose)))
+            pts_camera = torch.matmul(
+                world2cam, torch.t(self.vox_Wcoords))
+            z_points = pts_camera[2]
 
 
 
-        valid_pix = (x_pix >= 0) & (x_pix < 640) & (
-            y_pix >= 0) & (y_pix < 480) & (z_points > 0)
-        x_coords_valid = self.vox_coords[valid_pix, 0]
-        y_coords_valid = self.vox_coords[valid_pix, 1]
-        z_coords_valid = self.vox_coords[valid_pix, 2]
+            x_pix = torch.round((pts_camera[0] * self.fx)/z_points + self.cx).long()
+            y_pix = torch.round((pts_camera[1] * self.fy)/z_points + self.cy).long()
+
+
+
+            valid_pix = (x_pix >= 0) & (x_pix < 640) & (
+                y_pix >= 0) & (y_pix < 480) & (z_points > 0)
+            x_coords_valid = self.vox_coords[valid_pix, 0]
+            y_coords_valid = self.vox_coords[valid_pix, 1]
+            z_coords_valid = self.vox_coords[valid_pix, 2]
+            
+            z_pix = pts_camera[2, valid_pix]
+            depth_image = depth_image.cuda()
+            color_img = color_img.cuda()
+            depth_val = depth_image[y_pix[valid_pix], x_pix[valid_pix]]
+            rgb_val = color_img[y_pix[valid_pix], x_pix[valid_pix]]
+
+            depth_diff = depth_val - z_pix
+
+            dist = torch.clamp(depth_diff / sdf_trunc, max=1)
+
+            valid_pts = (depth_val > 0.) & (depth_diff >= -sdf_trunc)
+
+            x_points_valid = x_coords_valid[valid_pts].int()
+            y_points_valid = y_coords_valid[valid_pts].int()
+            z_points_valid = z_coords_valid[valid_pts].int()
+            valid_dist = dist[valid_pts]
+            valid_cols = rgb_val[valid_pts]
+
+
+
+            old_sdf = self.sdf_values[x_points_valid, y_points_valid,
+                                    z_points_valid]
+            
+            old_rgb = self.rgb_values[x_points_valid, y_points_valid,
+                                    z_points_valid]
+            
+            old_weights = self.weights[x_points_valid, y_points_valid,
+                                    z_points_valid]
+
+            self.sdf_values[x_points_valid, y_points_valid,
+                            z_points_valid] = ((old_weights * old_sdf) + valid_dist)/(old_weights + 1)
+            
+
+            self.rgb_values[x_points_valid, y_points_valid,
+                            z_points_valid] = ((old_weights[:, None] * old_rgb) + valid_cols)/(old_weights[:, None]  + 1)
+
+            self.weights[x_points_valid, y_points_valid,
+                        z_points_valid] = self.weights[x_points_valid, y_points_valid, z_points_valid] + 1
         
-        z_pix = pts_camera[2, valid_pix]
-        depth_val = depth_image[y_pix[valid_pix], x_pix[valid_pix]]
-        rgb_val = color_img[y_pix[valid_pix], x_pix[valid_pix]]
+            torch.cuda.empty_cache()
 
-        depth_diff = depth_val - z_pix
+            return 0
 
-        dist = torch.clamp(depth_diff / sdf_trunc, max=1)
+    def ray_casting(self, sample_size=2):
 
-        valid_pts = (depth_val > 0.) & (depth_diff >= -sdf_trunc)
+        u = torch.arange(0,640).float()
+        v = torch.arange(0,480).float()
 
-        x_points_valid = x_coords_valid[valid_pts].int()
-        y_points_valid = y_coords_valid[valid_pts].int()
-        z_points_valid = z_coords_valid[valid_pts].int()
-        valid_dist = dist[valid_pts]
-        valid_cols = rgb_val[valid_pts]
+        x_z = (u - self.cx)/self.fx
+        y_z = (v - self.cy)/self.fy
+        z = 1
+        xv,yv,zv = torch.meshgrid([x_z, y_z, torch.tensor([1.0])])
+
+        direction = torch.stack([xv.flatten(), yv.flatten(), zv.flatten()], dim=1)  
+
+        direction  = direction/torch.linalg.vector_norm(direction, dim=0)
+
+        print(direction.shape)
+        #now let's sample a ray
+        # p = point is the origin 
+        p = torch.asarray([0,0,0])
+        total_sample = torch.arange(sample_size) * self._voxel_size
+        # one_vec = torch.asarray([2,3,4])
+        # total_sample = total_sample[:, None] * one_vec[None, :]
+        # print(total_sample.shape)
+        all_sample_points =  total_sample[:, None] * direction[:, None, :]
 
 
-
-
-
-        old_sdf = self.sdf_values[x_points_valid, y_points_valid,
-                                  z_points_valid]
-        
-        old_rgb = self.rgb_values[x_points_valid, y_points_valid,
-                                  z_points_valid]
-        
-        old_weights = self.weights[x_points_valid, y_points_valid,
-                                   z_points_valid]
-
-        self.sdf_values[x_points_valid, y_points_valid,
-                        z_points_valid] = ((old_weights * old_sdf) + valid_dist)/(old_weights + 1)
-        
-
-        self.rgb_values[x_points_valid, y_points_valid,
-                        z_points_valid] = ((old_weights[:, None] * old_rgb) + valid_cols)/(old_weights[:, None]  + 1)
-
-        self.weights[x_points_valid, y_points_valid,
-                     z_points_valid] = self.weights[x_points_valid, y_points_valid, z_points_valid] + 1
-    
 
 
         return 0
+    
+
 
 
 if __name__ == "__main__":
@@ -161,7 +203,11 @@ if __name__ == "__main__":
         vol_bnds[:,1] = np.maximum(vol_bnds[:,1], np.amax(view_frust_pts, axis=1))
 
     print("Initializing voxel volume...")
-    vox_grid = TSDF(vol_bnds, voxel_size=0.02)
+
+
+    vox_grid = TSDF(vol_bnds, voxel_size=0.02, intristics=cam_intr)
+    # vox_grid.ray_casting()
+
 
     path_to_folder = "/home/zeus/masters/3DSMC/project/TSDF/data"
 
@@ -171,6 +217,7 @@ if __name__ == "__main__":
 
 
     for depth, pose, img in zip(depths, poses, imgs):
+        start_time = time.time()
         depth_im = cv2.imread(depth, -1).astype(float)
         depth_im = torch.from_numpy(depth_im)
         depth_im /= 1000.
@@ -181,7 +228,10 @@ if __name__ == "__main__":
         img = cv2.imread(img)
         img = torch.from_numpy(img)
         
-        vox_grid.integrate(depth_im, cam_pose, cam_intr, img)
+        vox_grid.integrate(depth_im, cam_pose, img)
+        end_time = time.time()
+
+        print(1/(end_time - start_time))
 
     sdf_numpy = vox_grid.sdf_values.numpy()
     color_sdf = vox_grid.rgb_values.numpy()
@@ -199,17 +249,14 @@ if __name__ == "__main__":
     x = np.arange(color_sdf.shape[0]) * voxel_size
     z = np.arange(color_sdf.shape[2]) * voxel_size
 
-    # Create interpolators for each color channel (R, G, B)
     r_interpolator = RegularGridInterpolator((x, y, z), color_sdf[..., 0])
     g_interpolator = RegularGridInterpolator((x, y, z), color_sdf[..., 1])
     b_interpolator = RegularGridInterpolator((x, y, z), color_sdf[..., 2])
 
-    # Interpolate the colors for the vertices
     r_values = r_interpolator(verts)
     g_values = g_interpolator(verts)
     b_values = b_interpolator(verts)
 
-    # Combine interpolated RGB values
     vertex_colors = np.stack((b_values, g_values, r_values), axis=-1)
 
 
@@ -217,7 +264,7 @@ if __name__ == "__main__":
     mesh.vertices = o3d.utility.Vector3dVector(verts)
     mesh.triangles = o3d.utility.Vector3iVector(faces)
     mesh.compute_vertex_normals()
-    mesh.vertex_colors = o3d.utility.Vector3dVector(vertex_colors / 255.0)  # Normalize RGB to [0, 1]
+    mesh.vertex_colors = o3d.utility.Vector3dVector(vertex_colors / 255.0) 
 
 
     o3d.visualization.draw_geometries([mesh])
