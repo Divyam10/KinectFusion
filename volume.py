@@ -62,29 +62,29 @@ class TSDF():
         z_grid = torch.arange(0, self._vol_dim[2])
         xv, yv, zv = torch.meshgrid([x_grid, y_grid, z_grid])
         self.vox_coords = torch.stack(
-            [xv.flatten(), yv.flatten(), zv.flatten()], dim=1).double()
+            [xv.flatten(), yv.flatten(), zv.flatten()], dim=1).float()
 
         self.vox_Wcoords = torch.cat([
-            (self.vox_coords * voxel_size) + self._vol_origin, torch.ones(len(self.vox_coords), 1, )], dim=1).double().cuda()
+            (self.vox_coords * voxel_size) + self._vol_origin, torch.ones(len(self.vox_coords), 1, )], dim=1).float().cuda()
 
         self.vox_coords = torch.cat([
-            self.vox_coords, torch.ones(len(self.vox_coords), 1, )], dim=1).double().cuda()
+            self.vox_coords, torch.ones(len(self.vox_coords), 1, )], dim=1).float().cuda()
 
         self.sdf_values = torch.ones(
-            (self._vol_dim[0], self._vol_dim[1], self._vol_dim[2])).double().cuda()
+            (self._vol_dim[0], self._vol_dim[1], self._vol_dim[2])).float().cuda()
         
 
         self.rgb_values = torch.zeros(
-            (self._vol_dim[0], self._vol_dim[1], self._vol_dim[2], 3)).double().cuda()
+            (self._vol_dim[0], self._vol_dim[1], self._vol_dim[2], 3)).float().cuda()
         
         self.weights = torch.zeros(
-            (self._vol_dim[0], self._vol_dim[1], self._vol_dim[2])).double().cuda()
+            (self._vol_dim[0], self._vol_dim[1], self._vol_dim[2])).float().cuda()
 
     def integrate(self, depth_image, camera_pose, color_img, sdf_trunc=0.03):
 
         with torch.no_grad():
 
-            world2cam = torch.inverse(torch.from_numpy(camera_pose)).cuda()
+            world2cam = torch.inverse(torch.from_numpy(camera_pose)).float().cuda()
             # print(torch.inverse(torch.from_numpy(camera_pose)))
             pts_camera = torch.matmul(
                 world2cam, torch.t(self.vox_Wcoords))
@@ -92,8 +92,8 @@ class TSDF():
 
 
 
-            x_pix = torch.round((pts_camera[0] * self.fx)/z_points + self.cx).long()
-            y_pix = torch.round((pts_camera[1] * self.fy)/z_points + self.cy).long()
+            x_pix = torch.round((pts_camera[0] * self.fx)/z_points + self.cx).int()
+            y_pix = torch.round((pts_camera[1] * self.fy)/z_points + self.cy).int()
 
 
 
@@ -111,7 +111,7 @@ class TSDF():
 
             depth_diff = depth_val - z_pix
 
-            dist = torch.clamp(depth_diff / sdf_trunc, max=1)
+            dist = torch.clamp(depth_diff / sdf_trunc, max=1).float()
 
             valid_pts = (depth_val > 0.) & (depth_diff >= -sdf_trunc)
 
@@ -233,8 +233,8 @@ if __name__ == "__main__":
 
         print(1/(end_time - start_time))
 
-    sdf_numpy = vox_grid.sdf_values.numpy()
-    color_sdf = vox_grid.rgb_values.numpy()
+    sdf_numpy = vox_grid.sdf_values.cpu().numpy()
+    color_sdf = vox_grid.rgb_values.cpu().numpy()
     voxel_size = 0.02
     
 
