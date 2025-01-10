@@ -13,15 +13,12 @@ import matplotlib.pyplot as plt
 import time
 
 def rigid_transform(xyz, transform):
-  """Applies a rigid transform to an (N, 3) pointcloud.
-  """
+
   xyz_h = np.hstack([xyz, np.ones((len(xyz), 1), dtype=np.float32)])
   xyz_t_h = np.dot(transform, xyz_h.T).T
   return xyz_t_h[:, :3]
 
 def get_view_frustum(depth_im, cam_intr, cam_pose):
-  """Get corners of 3D camera view frustum of depth image
-  """
   im_h = depth_im.shape[0]
   im_w = depth_im.shape[1]
   max_depth = np.max(depth_im)
@@ -85,7 +82,6 @@ class TSDF():
         with torch.no_grad():
 
             world2cam = torch.inverse(torch.from_numpy(camera_pose)).float().cuda()
-            # print(torch.inverse(torch.from_numpy(camera_pose)))
             pts_camera = torch.matmul(
                 world2cam, torch.t(self.vox_Wcoords))
             z_points = pts_camera[2]
@@ -146,7 +142,7 @@ class TSDF():
 
             return 0
 
-    def ray_casting(self, sample_size=2):
+    def ray_casting(self, camera_pose, sample_size=200):
 
         u = torch.arange(0,640).float()
         v = torch.arange(0,480).float()
@@ -161,17 +157,39 @@ class TSDF():
         direction  = direction/torch.linalg.vector_norm(direction, dim=0)
 
         print(direction.shape)
-        #now let's sample a ray
-        # p = point is the origin 
-        p = torch.asarray([0,0,0])
+
+        p = self._vol_origin
+
         total_sample = torch.arange(sample_size) * self._voxel_size
-        # one_vec = torch.asarray([2,3,4])
-        # total_sample = total_sample[:, None] * one_vec[None, :]
-        # print(total_sample.shape)
-        all_sample_points =  total_sample[:, None] * direction[:, None, :]
+        all_sample_points = total_sample[:, None] * direction[:, None, :]
+        all_sample_points = all_sample_points 
+        print(all_sample_points.shape)
+
+        # now how to check intersection? what are the dimension of the tsdf 
+
+
+        world2cam = torch.inverse(torch.from_numpy(camera_pose)).float()
+        pts_camera = torch.matmul(
+                world2cam, torch.t(self.vox_Wcoords.cpu())).T
 
 
 
+
+        x_max = pts_camera[:,0].max()
+        y_max = pts_camera[:,1].max()
+        z_max = pts_camera[:,2].max()
+
+        print(x_max,y_max,z_max)
+
+        valid_hits = (all_sample_points[:,:, 0] > 0 ) & (all_sample_points[:,:, 0] < x_max ) & (all_sample_points[:,:, 1] > 0 ) & (all_sample_points[:,:, 1] < y_max ) & (all_sample_points[:,:, 2] > 0 ) & (all_sample_points[:,:,2] < x_max )
+
+        intersection_pts = all_sample_points[valid_hits[:,:, None]]
+        
+        intersection_pts
+
+        print(intersection_pts.shape)
+
+        exit(1)
 
         return 0
     
@@ -206,14 +224,14 @@ if __name__ == "__main__":
 
 
     vox_grid = TSDF(vol_bnds, voxel_size=0.02, intristics=cam_intr)
-    # vox_grid.ray_casting()
+    vox_grid.ray_casting(worldpose)
 
 
     path_to_folder = "/home/zeus/masters/3DSMC/project/TSDF/data"
 
-    depths = sorted(glob.glob(path_to_folder + "/" + "*.depth.png"))
-    poses = sorted(glob.glob(path_to_folder + "/" + "*.pose.txt"))
-    imgs = sorted(glob.glob(path_to_folder + "/" + "*.color.jpg"))
+    depths = sorted(glob.glob(path_to_folder + "/" + "*.depth.png"))[:100]
+    poses = sorted(glob.glob(path_to_folder + "/" + "*.pose.txt"))[:100]
+    imgs = sorted(glob.glob(path_to_folder + "/" + "*.color.jpg"))[:100]
 
 
     for depth, pose, img in zip(depths, poses, imgs):
