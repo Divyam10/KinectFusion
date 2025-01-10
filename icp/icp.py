@@ -3,14 +3,17 @@ import torch.nn.functional as F
 
 
 class ICP(torch.nn.Module):
-    def __init__(self, max_iterations=10, optimizer=None, occlusion_threshold=0.1, symmetric_error=False):
+    def __init__(self, optimizer=None, occlusion_threshold=0.1, symmetric_error=False):
         super().__init__()
-        self.max_iterations = max_iterations
         self.optimizer = optimizer
         self.occlusion_threshold = occlusion_threshold
         self.symmetric_error = symmetric_error
 
     def forward(self, depth_source, depth_target, pose, K):
+        max_iterations = 1
+        if hasattr(self.optimizer, "max_iterations"):
+            max_iterations = self.optimizer.max_iterations
+
         vertices_source = self.compute_vertices(depth_source, K)
         if self.symmetric_error:
             normals_source = self.compute_normals(vertices_source)
@@ -19,7 +22,7 @@ class ICP(torch.nn.Module):
         normals_target = self.compute_normals(vertices_target)
 
         H, W, C = vertices_source.shape
-        for i in range(self.max_iterations):
+        for i in range(max_iterations):
             R = pose[:3, :3]
             t = pose[:3, -1]
             fx, fy, cx, cy = K[0, 0], K[1, 1], K[0, 2], K[1, 2]
@@ -51,13 +54,44 @@ class ICP(torch.nn.Module):
             diff = vertices_transformed - vertices_target_warped
             residuals = (diff * normals).sum(dim=-1)
 
-            Jf = self.compute_jacobian(vertices_transformed, normals)
-
             mask_source = vertices_source[:, :, 2] <= 0
             mask_target = vertices_target_warped[:, :, 2] <= 0
             out_of_view_pixels = (u_transformed <= 0) | (u_transformed >= W-1) | (v_transformed <= 0) | (v_transformed >= H-1)
+            # TODO: Test effects of occlusion mask and estimate how many pixels it is masking on average
             occlusion_mask = diff.norm(p=2, dim=-1) > self.occlusion_threshold
             mask = mask_source | mask_target | out_of_view_pixels | occlusion_mask
+            print(torch.sum(mask_source), torch.sum(mask_target), torch.sum(out_of_view_pixels), torch.sum(occlusion_mask))
+            print(mask.shape, torch.sum(mask))
+
+            # Perform linear least squares if no optimizer provided
+            if self.optimizer is None:
+                vertices_transformed = vertices_transformed.view(-1, 3)
+                normals = normals.view(-1, 3)
+                residuals = residuals.view(-1, 1)
+                mask = mask.view(-1)
+
+                A = torch.matmul(ICP.generate_3d_skew_symmetric_matrix(vertices_transformed.view(-1, 3)), normals.view(-1, 3).unsqueeze(-1)).squeeze(-1)
+                A = torch.cat((A, normals), dim=-1)
+
+                b = -residuals
+
+                A[mask] = 0.
+                b[mask] = 0.
+
+                # Linear solver for A @ xi = b
+                if A.device.type == 'mps':
+                    A = A.to("cpu")
+                    b = b.to("cpu")
+                    optimized_parameters, residuals, rank, _ = torch.linalg.lstsq(A, b)
+                    optimized_parameters = optimized_parameters.to("mps")
+                else:
+                    optimized_parameters, residuals, rank, _ = torch.linalg.lstsq(A, b)
+
+                pose = self.construct_pose_from_parameters(optimized_parameters)
+                return pose
+
+
+            Jf = self.compute_jacobian(vertices_transformed, normals)
 
             residuals[mask] = 0.
             residuals = residuals.view(H*W, 1, 1)
@@ -68,7 +102,6 @@ class ICP(torch.nn.Module):
             Jf = Jf.view(H*W, 1, -1)
 
             delta_parameters = self.optimizer(residuals, Jf)
-
             pose = self.exp_se3(delta_parameters) @ pose
 
         return pose
@@ -133,11 +166,11 @@ class ICP(torch.nn.Module):
         return feature_warped.permute(1, 2, 0).to(device)
 
     @staticmethod
-    def compute_jacobian(vertices_transformed, normals_target_warped):
+    def compute_jacobian(vertices_transformed, normals):
         H, W, C = vertices_transformed.shape
-        J_translation = normals_target_warped.view(-1, 3)
+        J_translation = normals.view(-1, 3)
 
-        J_rotation = torch.matmul(ICP.generate_3d_skew_symmetric_matrix(vertices_transformed.view(-1, 3)), normals_target_warped.view(-1, 3).unsqueeze(-1)).squeeze(-1)
+        J_rotation = torch.matmul(ICP.generate_3d_skew_symmetric_matrix(vertices_transformed.view(-1, 3)), normals.view(-1, 3).unsqueeze(-1)).squeeze(-1)
 
         Jf = torch.cat((J_rotation, J_translation), dim=-1).view(H, W, -1)
         return Jf
@@ -182,4 +215,14 @@ class ICP(torch.nn.Module):
         T[:3, 3] = torch.mv(j, v)
 
         return T
+
+    @staticmethod
+    def construct_pose_from_parameters(parameters):
+        pose = torch.tensor([
+            [1., parameters[0]*parameters[1]-parameters[2], parameters[0]*parameters[2]+parameters[1], parameters[3]],
+            [parameters[2], parameters[0]*parameters[1]*parameters[2]+1, parameters[1]*parameters[2]-parameters[0], parameters[4]],
+            [-parameters[1], parameters[0], 1, parameters[5]],
+            [0, 0, 0, 1]
+        ]).to(parameters.device)
+        return pose
 

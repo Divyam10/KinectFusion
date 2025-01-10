@@ -1,8 +1,9 @@
 import torch
 
 class LM_optimizer(torch.nn.Module):
-    def __init__(self, damping_factor=1e-3):
+    def __init__(self, max_iterations, damping_factor=1e-3):
         super().__init__()
+        self.max_iterations = max_iterations
         self.damping_factor = damping_factor
 
     def forward(self, residuals, Jf):
@@ -19,7 +20,7 @@ class LM_optimizer(torch.nn.Module):
         Hessian = Jtj + torch.diag(epsilon)
 
         # TODO: Add exception handling for cholesky (torch._C._LinAlgError: linalg.cholesky: The factorization could not be completed because the input is not positive-definite (t)
-        # Linear solver for H @ xi = -Jtr
+        # Linear solver for H @ del(xi) = -Jtr
         if Hessian.device.type == 'mps':
             Hessian = Hessian.to("cpu")
             Jtr = Jtr.to("cpu")

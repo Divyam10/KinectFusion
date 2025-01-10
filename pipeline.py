@@ -23,7 +23,7 @@ elif torch.backends.mps.is_available():
     device = torch.device("mps")
 else:
     device = torch.device("cpu")
-device = torch.device("cpu")
+# device = torch.device("cpu")
 
 # define allowed range of depth values in meters
 d_max = 5
@@ -193,8 +193,8 @@ def plot_3d_figure(point_cloud, normals, colors_np):
 
 
 data = prepare_data(depth_file, rgb_file, trajectory_file)
-optimizer = LM_optimizer()
-icp = ICP(max_iterations=5, optimizer=optimizer, symmetric_error=True)
+optimizer = LM_optimizer(max_iterations=5)
+icp = ICP(optimizer=None, occlusion_threshold=0.1, symmetric_error=True)
 
 depth, rgb, c2w = read_data(data, 0)
 H, W = depth.shape
@@ -209,7 +209,7 @@ vertices = torch.matmul(vertices, R.T) + t
 pcd = plot_3d_figure(vertices, normals, colors)
 
 time_list, c2w_list, c2w_gt_list = list(), list(), list()
-for i in range(1, len(data[:100])):
+for i in range(1, len(data[:50])):
     depth1, rgb1, c2w1 = read_data(data, i)
     t0 = get_time()
 
