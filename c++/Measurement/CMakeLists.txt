@@ -1,16 +1,23 @@
 ﻿cmake_minimum_required(VERSION 3.8)
 
-project("Measurement")
+project("Measurement" LANGUAGES CXX CUDA)
+
+find_package(CUDAToolkit REQUIRED)
+
+set(CMAKE_CUDA_ARCHITECTURES 60 70 80)
+
+# Somehow this enables debugging for CUDA code (and is bad for performance)
+set(CMAKE_CUDA_FLAGS_DEBUG "${CMAKE_CUDA_FLAGS_DEBUG} -G -g")
 
 # Include directories
-include_directories("C:/Program Files/OpenNI2/Include")
-link_directories("C:/Program Files/OpenNI2/Lib")
+include_directories("C:/Program Files/OpenNI2/Include" ${CUDAToolkit_INCLUDE_DIRS}, "C:/Users/steph/Documents/Projekte/KinectFusion/c++/Libs/eigen-3.4.0")
+link_directories("C:/Program Files/OpenNI2/Lib" ${CUDAToolkit_LIBRARY_DIR})
 
 # Create a testing executable
-add_executable(measurement_executable "Measurement.cpp" "Measurement.h" "PrimeSenseListener.h" "PrimeSenseVideoStreamListener.h" "FrameTuple.h" "KinectFusion.h"  "ImageData.h")
+add_executable(measurement_executable "Measurement.cpp" "Measurement.h" "PrimeSenseListener.h" "PrimeSenseVideoStreamListener.h" "FrameTuple.h" "KinectFusion.h"  "ImageData.h" "kernel.cu")
 
 # Link libraries
-target_link_libraries(measurement_executable OpenNI2)
+target_link_libraries(measurement_executable OpenNI2 CUDA::cudart)
 
 # Gathers all files in Redist
 set(OPENNI2_SOURCE_DIR "C:/Program Files/OpenNI2/Redist")

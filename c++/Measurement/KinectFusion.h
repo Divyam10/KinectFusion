@@ -10,9 +10,23 @@
 #include <atomic>
 #include <future>
 #include "ImageData.h"
+#include <cuda_runtime.h>
+#include <device_launch_parameters.h>
+#include <cuda.h>
+#include <Eigen/Dense>
 
 using namespace std;
 using namespace openni;
+using namespace Eigen;
+
+extern "C" void LaunchBilateralFilteringKernel(
+	const uint16_t* depthImage,
+	uint16_t* depthImageFiltered,
+	const unsigned int pixelCount,
+	const unsigned int width,
+	const unsigned int height,
+	const unsigned int minDepth,
+	const unsigned int maxDepth);
 
 class KinectFusion
 {
@@ -25,8 +39,15 @@ public:
 	shared_ptr<queue<unique_ptr<VideoFrameRef>>> colorFrameQueue;
 	shared_ptr<queue<unique_ptr<VideoFrameRef>>> depthFrameQueue;
 	unique_ptr<queue<unique_ptr<FrameTuple>>> frameTupleQueue;
+	VideoMode depthVideoMode;
 	PixelFormat pixelFormatColor;
 	PixelFormat pixelFormatDepth;
+	unsigned int width = 0;
+	unsigned int height = 0;
+	unsigned int pixelCount = 0;
+	unsigned int maxDepth = 0;
+	unsigned int minDepth = 0;
+	Matrix3d K_inv;
 	const unsigned int queueSizeLimit = 30; //Adjustable!
 	mutex frame_queue_mtx;
 	thread gatheringThread;
@@ -124,6 +145,24 @@ public:
 		if(this->videoDepthStream->addNewFrameListener(depthFrameListener.get()) != STATUS_OK)
 			throw runtime_error("Failed to add depth frame listener.");
 
+		//TODO camera exposure??
+		this->depthVideoMode = videoDepthStream->getVideoMode();
+		this->width = this->depthVideoMode.getResolutionX();
+		this->height = this->depthVideoMode.getResolutionY();
+		this->pixelCount = width * height;
+		this->maxDepth = videoDepthStream->getMaxPixelValue();
+		this->minDepth = videoDepthStream->getMinPixelValue();
+
+		auto focalX = int(depthVideoMode.getResolutionX() / 2.f * tanf(videoDepthStream->getHorizontalFieldOfView() / 2.f));
+		auto focalY = int(depthVideoMode.getResolutionY() / 2.f * tanf(videoDepthStream->getVerticalFieldOfView() / 2.f));
+		const unsigned int princPointX = width / 2;
+		const unsigned int princPointY = height / 2;
+
+		this->K_inv << focalX, 0, princPointX,
+			0.0, focalY, princPointY,
+			0.0, 0.0, 1.0;
+
+		this->K_inv.inverse();
 
 		//Start Frame Processing Thread
 		this->processingThread = thread(&KinectFusion::ProcessFrames, this);
@@ -136,6 +175,8 @@ public:
 
 		if (device.setImageRegistrationMode(IMAGE_REGISTRATION_DEPTH_TO_COLOR) != STATUS_OK)
 			throw runtime_error("No ImageRegistrationMode Possible..." + string(OpenNI::getExtendedError()));
+
+
 	}
 
 	/**
@@ -164,10 +205,11 @@ public:
 			//Tells us about the last frame that came in, at the time that we first got both 1 depth & 1 color frame
 			int frameDiff = colorFrame->getFrameIndex() - depthFrame->getFrameIndex();
 
-			// Color queue empty
-
 			while (frameDiff > 0)
 			{
+				if (this->depthFrameQueue->empty())
+					return;
+
 				depthFrame = move(this->depthFrameQueue->front());
 				depthFrameQueue->pop();
 				frameDiff--;
@@ -175,6 +217,9 @@ public:
 			
 			while (frameDiff < 0)
 			{
+				if (this->colorFrameQueue->empty())
+					return;
+
 				colorFrame = move(this->colorFrameQueue->front());
 				colorFrameQueue->pop();
 				frameDiff++;
@@ -186,9 +231,6 @@ public:
 				cout << "WTF Bruh" << endl;
 				return;
 			}
-
-			//TODO REMOVE
-			cout << colorFrame->getFrameIndex() << endl;
 
 			unique_ptr<FrameTuple> currentFrameTuple = make_unique<FrameTuple>();
 			currentFrameTuple->colorFrame = move(colorFrame);
@@ -224,58 +266,85 @@ public:
 					cv.wait(lk, [this] { return !frameTupleQueue->empty() || !isRunning; });
 				}
 
+				if (frameTupleQueue->empty())
+					continue;
+
 				currentFrame = move(frameTupleQueue->front());
 				frameTupleQueue->pop();
 			}
 			
-			//TODO Processing...
 			this->ProcessFrame(move(currentFrame));
 		}
 	}
 
 	void ProcessFrame(unique_ptr<FrameTuple> frame)
 	{
-		//Bilateral Filtering
-		/*
-		auto height = frame->colorFrame->getHeight();
-		auto width = frame->colorFrame->getWidth();
-		cout << "Color H/W: " << height << " " << width << endl;
-
-		auto height2 = frame->colorFrame->getHeight();
-		auto width2 = frame->colorFrame->getWidth();
-		cout << "Depth H/W: " << height2 << " " << width2 << endl;
-
-		//auto norm = 1 / 3; //3 should be norm constant...
-		//auto N_sig = exp(-t ^ 2 * 1 / (sig ^ 2));
-		//auto dk_u = 1/
-		*/
-		
-		//TODO remove "Simulates bilateral filtering
-		this_thread::sleep_for(chrono::milliseconds(50));
-
-
-
-		//TODO maybe add queue + mutex...
-
-
-
-		//Backtransformation
-		//TODO move height/width since const
-		const auto pixelCount = 320 * 240;
-
-		auto colorDataSize = frame->colorFrame->getDataSize();
-		auto depthDataSize = frame->depthFrame->getDataSize();
-
-		//RGB888 = 320 × 240 resolution with 3 bytes (rgb) per pixel
+		//320 × 240 resolution, 76800 pixels in both color & depth
+		//RGB888 = 3 bytes (rgb) per pixel
 		//Each index is R->G->B->R...
-		const uint8_t* colorData = reinterpret_cast<const uint8_t*>(frame->colorFrame->getData());
-
-		//TODO check if depth should be limited by provided "max depth"
 		// PIXEL_FORMAT_DEPTH_1_MM(?) -> Resolution of Data in mm
-		//2 Bytes to store max common sensor distances, each index is depth value 
-		const uint16_t* depthData = reinterpret_cast<const uint16_t*>(frame->depthFrame->getData());
+		//2 Bytes to store max common sensor distances, each index is depth value
+		//const uint16_t* depthImage = reinterpret_cast<const uint16_t*>(frame->depthFrame->getData());
+		//uint16_t* depthImageFiltered = new uint16_t[pixelCount];
+		
+		const unsigned int pixelCount = 76800; //TODO Also defined in "this"...
 
-		//unique_ptr<ImageData>imageData = make_unique<ImageData>(colorData, depthData);
+		array<uint16_t, pixelCount> depthImage;
+		memcpy(depthImage.data(), frame->depthFrame->getData(), pixelCount * sizeof(uint16_t));
+
+		array<uint16_t, pixelCount> depthImageFiltered{};
+		depthImageFiltered.fill(1);
+
+
+		//Blocking CUDA function
+		LaunchBilateralFilteringKernel(
+			depthImage.data(),
+			depthImageFiltered.data(),
+			pixelCount,
+			this->width,
+			this->height,
+			this->minDepth,
+			this->maxDepth);
+
+		//TODO delete[] depthImage ??;
+
+		CreateVertexMap(depthImageFiltered);
+	}
+
+
+	void CreateVertexMap(const std::array<uint16_t, 76800>& depthImageFiltered)
+	{
+		//Pseudo code
+		//Precompute somewhere else pixelmatrix:
+		//MatrixXf pixels(3, pixelCount); //check#
+		/*
+		vector<float> vertexMap;
+		vector<bool> vertexValidityMap;
+		vertexMap.resize(pixelCount * 3);
+		//VectorXf::Ones()
+		int index = 0;
+		for (unsigned int v = 0; v < height; v++)
+		{
+			for (unsigned int u = 0; u < width; u++)
+			{
+				auto idx = v * height + u;
+				//auto depth = depthImageFiltered[idx];
+				//vertexValidityMap[idx] = depth > 0;
+				//pixels(0, idx) = u;
+				//pixels(1, idx) = v;
+				//pixels(2, idx) = 1.f;
+				index++;
+			}
+		}
+		//After precomputation:
+		//auto cameraSpacePixels = this->K_inv * pixels;
+
+		for (int i = 0; i < pixelCount; i++)
+		{
+			//cameraSpacePixels[i] *= depthImageFiltered[i]; //idx prob wrong for cameraspacepxels
+		}
+		*/
+
 	}
 
 };
