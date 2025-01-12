@@ -8,4 +8,4 @@ venv/
 # Ignore IDEs
 *.vs
 # Ignore local
-local/
+Libs/
