@@ -14,22 +14,53 @@
 #include <device_launch_parameters.h>
 #include <cuda.h>
 #include <Eigen/Dense>
+#include "QueueWrapper.h"
+#include "Constants.h"
 
-using namespace std;
-using namespace openni;
-using namespace Eigen;
+namespace cst = ScanMoCap;
 
+//Definitions for C++ Compiler
 extern "C" void LaunchBilateralFilteringKernel(
 	const uint16_t* depthImage,
 	uint16_t* depthImageFiltered,
+	bool* vertexValidityMask,
 	const unsigned int pixelCount,
 	const unsigned int width,
 	const unsigned int height,
 	const unsigned int minDepth,
-	const unsigned int maxDepth);
+	const unsigned int maxDepth,
+	const unsigned int sigmaSpatial,
+	const unsigned int sigmaRange);
 
-class KinectFusion
-{
+extern "C" void LaunchBackProjectionKernel(
+	float* K_inv,
+	const uint16_t* depthImageFiltered,
+	uint16_t* backProjectedDepthImage,
+	const unsigned int pixelCount,
+	const unsigned int width,
+	const unsigned int height,
+	const unsigned int stride);
+
+extern "C" void LaunchBlockAveragingAndSubsampleKernel(
+	const uint16_t* depthImageL,
+	uint16_t* depthImageLAveraged,
+	const unsigned int pixelCountL,
+	const unsigned int pixelCountLAveraged,
+	const unsigned int widthL,
+	const unsigned int heightL,
+	const unsigned int blockSize,
+	const unsigned int sigmaRange);
+
+extern "C" void LaunchNormalMapKernel(
+	const uint16_t* vertexMap,
+	uint16_t* normalMap,
+	const unsigned int pixelCount,
+	const unsigned int width,
+	const unsigned int height,
+	const unsigned int stride);
+
+
+class KinectFusion {
 public:
 	unique_ptr<Device> device;
 	unique_ptr<VideoStream> videoColorStream;
@@ -39,28 +70,51 @@ public:
 	shared_ptr<queue<unique_ptr<VideoFrameRef>>> colorFrameQueue;
 	shared_ptr<queue<unique_ptr<VideoFrameRef>>> depthFrameQueue;
 	unique_ptr<queue<unique_ptr<FrameTuple>>> frameTupleQueue;
+
+	//unique_ptr<QueueWrapper<ProcessedFrame>> processedFramesQueue; //TODO might split data if memory bound AND check unique_ptrs...
+
 	VideoMode depthVideoMode;
 	PixelFormat pixelFormatColor;
 	PixelFormat pixelFormatDepth;
-	unsigned int width = 0;
-	unsigned int height = 0;
-	unsigned int pixelCount = 0;
+	//unsigned int width = 0;
+	//unsigned int height = 0;
+	//unsigned int pixelCount = 0;
 	unsigned int maxDepth = 0;
 	unsigned int minDepth = 0;
-	Matrix3d K_inv;
+	array<float, 9> K_inv;
 	const unsigned int queueSizeLimit = 30; //Adjustable!
 	mutex frame_queue_mtx;
+	mutex processed_frame_queue_mtx;
 	thread gatheringThread;
 	thread processingThread;
-	condition_variable cv;
+	condition_variable frame_cv;
+	condition_variable processed_frame_cv;
 	atomic<bool>& isRunning;
+	const unsigned int sigmaSpatial = 5; //TODO might move out of this function, should be the same across program!
+	const int sigmaRange = 50; //TODO might move out of this function,should be the same across program!
+	function<void(const ProcessedFrame&)> pythonCallback;
 
-	KinectFusion(atomic<bool>& isRunning)
+		KinectFusion(
+			atomic<bool>& isRunning,
+			function<void(const ProcessedFrame&)> pythonCallback) // pass by reference to avoid copying
 		: colorFrameQueue(make_shared<queue<unique_ptr<VideoFrameRef>>>()),
 		depthFrameQueue(make_shared<queue<unique_ptr<VideoFrameRef>>>()),
 		frameTupleQueue(make_unique<queue<unique_ptr<FrameTuple>>>()),
-		isRunning(isRunning) {}
+		isRunning(isRunning),
+		pythonCallback(pythonCallback) {}
+		/*
+		processedFramesQueue(
+			make_unique<QueueWrapper<ProcessedFrame>>(
+				this->processed_frame_queue_mtx,
+				this->processed_frame_cv,
+				this->isRunning,
+				pythonCallback)
+		){}
+		*/ 
 
+	//[pythonCallback](const ProcessedFrame& frame) {
+	//pythonCallback(frame);
+	//}
 	~KinectFusion() 
 	{
 		isRunning = false;
@@ -147,22 +201,28 @@ public:
 
 		//TODO camera exposure??
 		this->depthVideoMode = videoDepthStream->getVideoMode();
-		this->width = this->depthVideoMode.getResolutionX();
-		this->height = this->depthVideoMode.getResolutionY();
-		this->pixelCount = width * height;
+		//this->width = this->depthVideoMode.getResolutionX();
+		//this->height = this->depthVideoMode.getResolutionY();
+		//this->pixelCount = width * height;
 		this->maxDepth = videoDepthStream->getMaxPixelValue();
 		this->minDepth = videoDepthStream->getMinPixelValue();
 
-		auto focalX = int(depthVideoMode.getResolutionX() / 2.f * tanf(videoDepthStream->getHorizontalFieldOfView() / 2.f));
-		auto focalY = int(depthVideoMode.getResolutionY() / 2.f * tanf(videoDepthStream->getVerticalFieldOfView() / 2.f));
-		const unsigned int princPointX = width / 2;
-		const unsigned int princPointY = height / 2;
+		const float focalX = float(depthVideoMode.getResolutionX()) / 2.f * tanf(videoDepthStream->getHorizontalFieldOfView() / 2.f);
+		const float focalY = float(depthVideoMode.getResolutionY()) / 2.f * tanf(videoDepthStream->getVerticalFieldOfView() / 2.f);
+		const float princPointX = float(cst::width / 2);
+		const float princPointY = float(cst::height / 2);
 
-		this->K_inv << focalX, 0, princPointX,
+		//Create inverse of intrinsic K as 1D array
+		Eigen::Matrix3f tempK;
+		tempK << focalX, 0.f, princPointX,
 			0.0, focalY, princPointY,
 			0.0, 0.0, 1.0;
 
-		this->K_inv.inverse();
+		tempK = tempK.inverse().eval();
+
+		for (int i = 0; i < 9; ++i) {
+			this->K_inv[i] = tempK(i / 3, i % 3); 
+		}
 
 		//Start Frame Processing Thread
 		this->processingThread = thread(&KinectFusion::ProcessFrames, this);
@@ -244,7 +304,7 @@ public:
 			}
 
 			//Notify 1 (of the) processing Thread(s)
-			cv.notify_one();
+			frame_cv.notify_one();
 		}
 		
 	}
@@ -263,7 +323,7 @@ public:
 				//Avoid spurious wakeups
 				while (frameTupleQueue->empty() && isRunning)
 				{
-					cv.wait(lk, [this] { return !frameTupleQueue->empty() || !isRunning; });
+					frame_cv.wait(lk, [this] { return !frameTupleQueue->empty() || !isRunning; });
 				}
 
 				if (frameTupleQueue->empty())
@@ -287,64 +347,149 @@ public:
 		//const uint16_t* depthImage = reinterpret_cast<const uint16_t*>(frame->depthFrame->getData());
 		//uint16_t* depthImageFiltered = new uint16_t[pixelCount];
 		
-		const unsigned int pixelCount = 76800; //TODO Also defined in "this"...
 
-		array<uint16_t, pixelCount> depthImage;
-		memcpy(depthImage.data(), frame->depthFrame->getData(), pixelCount * sizeof(uint16_t));
+		//Copy original data
+		unique_ptr<array<uint16_t, cst::pixelCount>> depthImage = make_unique<array<uint16_t, cst::pixelCount>>();
+		memcpy(depthImage->data(), frame->depthFrame->getData(), cst::pixelCount * sizeof(uint16_t));
 
-		array<uint16_t, pixelCount> depthImageFiltered{};
-		depthImageFiltered.fill(1);
+		unique_ptr<array<uint16_t, cst::pixelCount>> depthImageFiltered = make_unique<array<uint16_t, cst::pixelCount>>();
+
+		unique_ptr<array<uint16_t, cst::pixelCountXYZ>> vertexMap = make_unique<array<uint16_t, cst::pixelCountXYZ>>();
+
+		unique_ptr<array<bool, cst::pixelCount>> vertexValidityMask = make_unique<array<bool, cst::pixelCount>>();
+		//Init all vertices as valid
+		vertexValidityMask->fill(true); 
 
 
 		//Blocking CUDA function
+		//TODO adjust kernels to ignore invalid depths using vertexValidityMap
 		LaunchBilateralFilteringKernel(
-			depthImage.data(),
-			depthImageFiltered.data(),
-			pixelCount,
-			this->width,
-			this->height,
+			depthImage->data(),
+			depthImageFiltered->data(),
+			vertexValidityMask->data(),
+			cst::pixelCount,
+			cst::width,
+			cst::height,
 			this->minDepth,
-			this->maxDepth);
+			this->maxDepth,
+			this->sigmaSpatial,
+			this->sigmaRange);
 
-		//TODO delete[] depthImage ??;
+		LaunchBackProjectionKernel(
+			this->K_inv.data(),
+			depthImageFiltered->data(),
+			vertexMap->data(),
+			cst::pixelCount,
+			cst::width,
+			cst::height,
+			cst::stride);
 
-		CreateVertexMap(depthImageFiltered);
-	}
+		//Calculate L=3: DepthImagePyramid, VertexMapPyramid and NormalMapPyramid
+		const unsigned int blockSize = 2;
 
+		unique_ptr<array<uint16_t, cst::pixelCountL2>> depthImageFilteredL2 = make_unique<array<uint16_t, cst::pixelCountL2>>();
+		unique_ptr<array<uint16_t, cst::pixelCountL3>> depthImageFilteredL3 = make_unique<array<uint16_t, cst::pixelCountL3>>();
 
-	void CreateVertexMap(const std::array<uint16_t, 76800>& depthImageFiltered)
-	{
-		//Pseudo code
-		//Precompute somewhere else pixelmatrix:
-		//MatrixXf pixels(3, pixelCount); //check#
-		/*
-		vector<float> vertexMap;
-		vector<bool> vertexValidityMap;
-		vertexMap.resize(pixelCount * 3);
-		//VectorXf::Ones()
-		int index = 0;
-		for (unsigned int v = 0; v < height; v++)
+		unique_ptr<array<uint16_t, cst::pixelCountXYZL2>> vertexMapL2 = make_unique<array<uint16_t, cst::pixelCountXYZL2>>();
+		unique_ptr<array<uint16_t, cst::pixelCountXYZL3>> vertexMapL3 = make_unique<array<uint16_t, cst::pixelCountXYZL3>>();
+
+		unique_ptr<array<uint16_t, cst::pixelCountXYZ>> normalMap = make_unique<array<uint16_t, cst::pixelCountXYZ>>();
+		unique_ptr<array<uint16_t, cst::pixelCountXYZL2>> normalMapL2 = make_unique<array<uint16_t, cst::pixelCountXYZL2>>();
+		unique_ptr<array<uint16_t, cst::pixelCountXYZL3>> normalMapL3 = make_unique<array<uint16_t, cst::pixelCountXYZL3>>();
+
+		//Blockaveraging and Subsampling to half resolution --> 2x2 blocks
+		LaunchBlockAveragingAndSubsampleKernel(
+			depthImageFiltered->data(),
+			depthImageFilteredL2->data(),
+			cst::pixelCount,
+			cst::pixelCountL2,
+			cst::width,
+			cst::height,
+			blockSize,
+			this->sigmaRange);
+		
+		LaunchBlockAveragingAndSubsampleKernel(
+			depthImageFilteredL2->data(),
+			depthImageFilteredL3->data(),
+			cst::pixelCountL2,
+			cst::pixelCountL3,
+			cst::widthL2,
+			cst::heightL2,
+			blockSize,
+			this->sigmaRange);
+
+		LaunchBackProjectionKernel(
+			this->K_inv.data(),
+			depthImageFilteredL2->data(),
+			vertexMapL2->data(),
+			cst::pixelCountL2,
+			cst::widthL2,
+			cst::heightL2,
+			cst::stride);
+
+		LaunchBackProjectionKernel(
+			this->K_inv.data(),
+			depthImageFilteredL3->data(),
+			vertexMapL3->data(),
+			cst::pixelCountL3,
+			cst::widthL3,
+			cst::heightL3,
+			cst::stride);
+
+		LaunchNormalMapKernel(
+			vertexMap->data(),
+			normalMap->data(),
+			cst::pixelCount,
+			cst::width,
+			cst::height,
+			cst::stride
+		);
+
+		LaunchNormalMapKernel(
+			vertexMapL2->data(),
+			normalMapL2->data(),
+			cst::pixelCountL2,
+			cst::widthL2,
+			cst::heightL2,
+			cst::stride
+		);
+
+		LaunchNormalMapKernel(
+			vertexMapL3->data(),
+			normalMapL3->data(),
+			cst::pixelCountL3,
+			cst::widthL3,
+			cst::heightL3,
+			cst::stride
+		);
+
+		//TODO check if this should be a pointer
+		//processedFramesQueue->Push(
+		ProcessedFrame processedFrame = ProcessedFrame
 		{
-			for (unsigned int u = 0; u < width; u++)
+			move(vertexValidityMask),
+			PyramidLevel<cst::pixelCount>
 			{
-				auto idx = v * height + u;
-				//auto depth = depthImageFiltered[idx];
-				//vertexValidityMap[idx] = depth > 0;
-				//pixels(0, idx) = u;
-				//pixels(1, idx) = v;
-				//pixels(2, idx) = 1.f;
-				index++;
+				move(depthImageFiltered),
+				move(vertexMap),
+				move(normalMap)
+			},
+			PyramidLevel<cst::pixelCountL2>
+			{
+				move(depthImageFilteredL2),
+				move(vertexMapL2),
+				move(normalMapL2)
+			},
+			PyramidLevel<cst::pixelCountL3>
+			{
+				move(depthImageFilteredL3),
+				move(vertexMapL3),
+				move(normalMapL3)
 			}
-		}
-		//After precomputation:
-		//auto cameraSpacePixels = this->K_inv * pixels;
+		};
+		//);
 
-		for (int i = 0; i < pixelCount; i++)
-		{
-			//cameraSpacePixels[i] *= depthImageFiltered[i]; //idx prob wrong for cameraspacepxels
-		}
-		*/
-
+		this->pythonCallback(processedFrame);
 	}
 
 };

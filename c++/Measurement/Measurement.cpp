@@ -1,13 +1,20 @@
 ﻿// Measurement.cpp : Defines the entry point for the application.
-//
 
 #include "Measurement.h"
+#include <chrono> //TODO remove
+
+using namespace chrono;
 
 static void InitKinectFusion(shared_ptr<KinectFusion> kinectFusion, promise<void>& initPromise);
 static void HandleKeyPresses(atomic<bool>& isRunning);
 
-int main()
-{
+auto previousTime = high_resolution_clock::now();
+
+/*
+* Called by Python with "OnFrame" Callback
+*/
+static int CxxMain(function<void(const ProcessedFrame&)> pythonCallback) {
+
 	atomic<bool> isRunning = true; //Set before creation of threads
 	thread kinectFusionThread;
 	shared_ptr<KinectFusion> kinectFusion;
@@ -17,7 +24,7 @@ int main()
 	try
 	{
 		//Construct in main thread
-		kinectFusion = make_shared<KinectFusion>(isRunning);
+		kinectFusion = make_shared<KinectFusion>(isRunning, pythonCallback);
 
 		//Init on worker thread
 		kinectFusionThread = thread(InitKinectFusion, kinectFusion, ref(initPromise));
@@ -44,12 +51,39 @@ int main()
 	return 0;
 }
 
+
+/*
+* Debugging functions
+*/
+
+/*********************************************/
+static void TestPythonCallbackFunc(const ProcessedFrame& processedFrame) {
+	auto currentTime = high_resolution_clock::now();
+	cout << "Ms/Frame:  " << duration_cast<milliseconds>(currentTime - previousTime).count() << endl; // ~40ms per call (frame)
+	previousTime = currentTime;
+	
+}
+
+int main()
+{
+	return CxxMain([] (const ProcessedFrame& processedFrame) { TestPythonCallbackFunc(processedFrame); });
+}
+/*********************************************/
+
+
+/* 
+* KinectFusion logic initialized by worker thread 
+*/
 static void InitKinectFusion(shared_ptr<KinectFusion> kinectFusion, promise<void>& initPromise)
 {
 	kinectFusion->Init(initPromise);
 }
 
 //TODO Check and work on this!
+/*
+* Key Input handled by worker thread
+*/
+
 static void HandleKeyPresses(atomic<bool>& isRunning)
 {
 	//TODO "Please Press Q to exit"
