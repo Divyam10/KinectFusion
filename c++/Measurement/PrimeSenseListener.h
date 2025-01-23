@@ -3,7 +3,7 @@
 #include <iostream>
 #include "PrimeSenseVideoStreamListener.h"
 #include <queue>
-#include "FrameTuple.h"
+#include "Structs.h"
 #include <memory>
 
 using namespace openni;

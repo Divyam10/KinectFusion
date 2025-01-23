@@ -14,8 +14,9 @@
 #include <device_launch_parameters.h>
 #include <cuda.h>
 #include <Eigen/Dense>
-#include "QueueWrapper.h"
+#include "ProcessedFrameQueue.h"
 #include "Constants.h"
+#include "Structs.h"
 
 namespace cst = ScanMoCap;
 
@@ -71,7 +72,7 @@ public:
 	shared_ptr<queue<unique_ptr<VideoFrameRef>>> depthFrameQueue;
 	unique_ptr<queue<unique_ptr<FrameTuple>>> frameTupleQueue;
 
-	//unique_ptr<QueueWrapper<ProcessedFrame>> processedFramesQueue; //TODO might split data if memory bound AND check unique_ptrs...
+	shared_ptr<ProcessedFrameQueue> processedFramesQueue; // Shared -> NEEDS to be copyable for python / pybind
 
 	VideoMode depthVideoMode;
 	PixelFormat pixelFormatColor;
@@ -84,37 +85,31 @@ public:
 	array<float, 9> K_inv;
 	const unsigned int queueSizeLimit = 30; //Adjustable!
 	mutex frame_queue_mtx;
-	mutex processed_frame_queue_mtx;
 	thread gatheringThread;
 	thread processingThread;
 	condition_variable frame_cv;
-	condition_variable processed_frame_cv;
 	atomic<bool>& isRunning;
 	const unsigned int sigmaSpatial = 5; //TODO might move out of this function, should be the same across program!
 	const int sigmaRange = 50; //TODO might move out of this function,should be the same across program!
-	function<void(const ProcessedFrame&)> pythonCallback;
 
-		KinectFusion(
-			atomic<bool>& isRunning,
-			function<void(const ProcessedFrame&)> pythonCallback) // pass by reference to avoid copying
+	KinectFusion(
+		atomic<bool>& isRunning,
+		function<void()> pythonCallback)
 		: colorFrameQueue(make_shared<queue<unique_ptr<VideoFrameRef>>>()),
 		depthFrameQueue(make_shared<queue<unique_ptr<VideoFrameRef>>>()),
 		frameTupleQueue(make_unique<queue<unique_ptr<FrameTuple>>>()),
 		isRunning(isRunning),
-		pythonCallback(pythonCallback) {}
 		/*
 		processedFramesQueue(
-			make_unique<QueueWrapper<ProcessedFrame>>(
-				this->processed_frame_queue_mtx,
-				this->processed_frame_cv,
+			make_shared<MutexQueue<ProcessedFrame>>(
 				this->isRunning,
-				pythonCallback)
+				pythonCallback,
+				this->queueSizeLimit) //Might give this separate limit
 		){}
-		*/ 
+		*/
+		//Init Queue Singleton
+		processedFramesQueue(ProcessedFrameQueue::Init(isRunning, pythonCallback, queueSizeLimit)) {};
 
-	//[pythonCallback](const ProcessedFrame& frame) {
-	//pythonCallback(frame);
-	//}
 	~KinectFusion() 
 	{
 		isRunning = false;
@@ -143,18 +138,6 @@ public:
 			if (OpenNI::initialize() != STATUS_OK)
 				throw runtime_error("Failed to initialize OpenNI: " + string(OpenNI::getExtendedError()));
 
-			//Multiple Devices
-			/*
-			PrimeSenseConnectedListener primeSenseConnectedListener = PrimeSenseConnectedListener([this](unique_ptr<Device> device)
-				{
-					this->device = move(device);
-					OnDeviceFound(*this->device);
-				});
-
-			OpenNI::addDeviceConnectedListener(&primeSenseConnectedListener);
-			*/
-
-
 			this->device = make_unique<Device>();
 
 			if (device->open(ANY_DEVICE) != STATUS_OK)
@@ -171,6 +154,7 @@ public:
 		{
 			initPromise.set_exception(current_exception());
 		}
+		PySys_WriteStdout("Device Init Succesfull!\n");
 	}
 
 	/**
@@ -302,6 +286,8 @@ public:
 			{
 				this->frameTupleQueue->pop();
 			}
+			//TODO ok. here me out. if this is commented out i cant see any output on the python side?
+			PySys_WriteStdout("RawFrame\n");
 
 			//Notify 1 (of the) processing Thread(s)
 			frame_cv.notify_one();
@@ -339,6 +325,7 @@ public:
 
 	void ProcessFrame(unique_ptr<FrameTuple> frame)
 	{
+		PySys_WriteStdout("Processing Frame\n");
 		//320 × 240 resolution, 76800 pixels in both color & depth
 		//RGB888 = 3 bytes (rgb) per pixel
 		//Each index is R->G->B->R...
@@ -349,14 +336,14 @@ public:
 		
 
 		//Copy original data
-		unique_ptr<array<uint16_t, cst::pixelCount>> depthImage = make_unique<array<uint16_t, cst::pixelCount>>();
+		shared_ptr<array<uint16_t, cst::pixelCount>> depthImage = make_shared<array<uint16_t, cst::pixelCount>>();
 		memcpy(depthImage->data(), frame->depthFrame->getData(), cst::pixelCount * sizeof(uint16_t));
 
-		unique_ptr<array<uint16_t, cst::pixelCount>> depthImageFiltered = make_unique<array<uint16_t, cst::pixelCount>>();
+		shared_ptr<array<uint16_t, cst::pixelCount>> depthImageFiltered = make_shared<array<uint16_t, cst::pixelCount>>();
 
-		unique_ptr<array<uint16_t, cst::pixelCountXYZ>> vertexMap = make_unique<array<uint16_t, cst::pixelCountXYZ>>();
+		shared_ptr<array<uint16_t, cst::pixelCountXYZ>> vertexMap = make_shared<array<uint16_t, cst::pixelCountXYZ>>();
 
-		unique_ptr<array<bool, cst::pixelCount>> vertexValidityMask = make_unique<array<bool, cst::pixelCount>>();
+		shared_ptr<array<bool, cst::pixelCount>> vertexValidityMask = make_shared<array<bool, cst::pixelCount>>();
 		//Init all vertices as valid
 		vertexValidityMask->fill(true); 
 
@@ -387,15 +374,15 @@ public:
 		//Calculate L=3: DepthImagePyramid, VertexMapPyramid and NormalMapPyramid
 		const unsigned int blockSize = 2;
 
-		unique_ptr<array<uint16_t, cst::pixelCountL2>> depthImageFilteredL2 = make_unique<array<uint16_t, cst::pixelCountL2>>();
-		unique_ptr<array<uint16_t, cst::pixelCountL3>> depthImageFilteredL3 = make_unique<array<uint16_t, cst::pixelCountL3>>();
+		shared_ptr<array<uint16_t, cst::pixelCountL2>> depthImageFilteredL2 = make_shared<array<uint16_t, cst::pixelCountL2>>();
+		shared_ptr<array<uint16_t, cst::pixelCountL3>> depthImageFilteredL3 = make_shared<array<uint16_t, cst::pixelCountL3>>();
 
-		unique_ptr<array<uint16_t, cst::pixelCountXYZL2>> vertexMapL2 = make_unique<array<uint16_t, cst::pixelCountXYZL2>>();
-		unique_ptr<array<uint16_t, cst::pixelCountXYZL3>> vertexMapL3 = make_unique<array<uint16_t, cst::pixelCountXYZL3>>();
+		shared_ptr<array<uint16_t, cst::pixelCountXYZL2>> vertexMapL2 = make_shared<array<uint16_t, cst::pixelCountXYZL2>>();
+		shared_ptr<array<uint16_t, cst::pixelCountXYZL3>> vertexMapL3 = make_shared<array<uint16_t, cst::pixelCountXYZL3>>();
 
-		unique_ptr<array<uint16_t, cst::pixelCountXYZ>> normalMap = make_unique<array<uint16_t, cst::pixelCountXYZ>>();
-		unique_ptr<array<uint16_t, cst::pixelCountXYZL2>> normalMapL2 = make_unique<array<uint16_t, cst::pixelCountXYZL2>>();
-		unique_ptr<array<uint16_t, cst::pixelCountXYZL3>> normalMapL3 = make_unique<array<uint16_t, cst::pixelCountXYZL3>>();
+		shared_ptr<array<uint16_t, cst::pixelCountXYZ>> normalMap = make_shared<array<uint16_t, cst::pixelCountXYZ>>();
+		shared_ptr<array<uint16_t, cst::pixelCountXYZL2>> normalMapL2 = make_shared<array<uint16_t, cst::pixelCountXYZL2>>();
+		shared_ptr<array<uint16_t, cst::pixelCountXYZL3>> normalMapL3 = make_shared<array<uint16_t, cst::pixelCountXYZL3>>();
 
 		//Blockaveraging and Subsampling to half resolution --> 2x2 blocks
 		LaunchBlockAveragingAndSubsampleKernel(
@@ -464,32 +451,42 @@ public:
 		);
 
 		//TODO check if this should be a pointer
-		//processedFramesQueue->Push(
-		ProcessedFrame processedFrame = ProcessedFrame
-		{
-			move(vertexValidityMask),
-			PyramidLevel<cst::pixelCount>
+		processedFramesQueue->Push(
+			ProcessedFrame
 			{
-				move(depthImageFiltered),
-				move(vertexMap),
-				move(normalMap)
-			},
-			PyramidLevel<cst::pixelCountL2>
-			{
-				move(depthImageFilteredL2),
-				move(vertexMapL2),
-				move(normalMapL2)
-			},
-			PyramidLevel<cst::pixelCountL3>
-			{
-				move(depthImageFilteredL3),
-				move(vertexMapL3),
-				move(normalMapL3)
+				move(vertexValidityMask),
+				PyramidLevel<cst::pixelCount>
+				{
+					move(depthImageFiltered),
+					move(vertexMap),
+					move(normalMap)
+				},
+				PyramidLevel<cst::pixelCountL2>
+				{
+					move(depthImageFilteredL2),
+					move(vertexMapL2),
+					move(normalMapL2)
+				},
+				PyramidLevel<cst::pixelCountL3>
+				{
+					move(depthImageFilteredL3),
+					move(vertexMapL3),
+					move(normalMapL3)
+				}
 			}
-		};
-		//);
+		);
 
-		this->pythonCallback(processedFrame);
+
+		//TODO 
+		// Queue: make mutex internal (maybe remove cv?
+		// Copy queue size limit as done before with mutex to remove/add
+		// 
+		//Expose Queue.pop to python, not queue.
+		//Call this func on python callback
+		//
+		//MAYBE: Have function in c++ wait for frames (as is hypothetically implemented in queue) then call python cb
+
+		
 	}
 
 };

@@ -1,7 +1,7 @@
 #pragma once
 #include <OpenNI.h>
 #include <functional>
-#include "FrameTuple.h"
+#include "Structs.h"
 #include <memory>
 #include <queue>
 
