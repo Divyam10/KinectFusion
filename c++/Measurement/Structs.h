@@ -8,8 +8,15 @@ using namespace openni;
 using namespace std;
 namespace cst = ScanMoCap;
 
-//TODO maybe switch solution, to not hardcode, but this is fine for us
+struct ImageData
+{
+	const uint8_t* colorData;
+	const uint16_t* depthData;
 
+	ImageData(const uint8_t* color, const uint16_t* depth)
+		: colorData(color), depthData(depth) {
+	}
+};
 
 struct FrameTuple
 {
@@ -27,7 +34,9 @@ struct PyramidLevel {
 
 struct ProcessedFrame
 {
-	shared_ptr<std::array<bool, cst::pixelCount>> validityMask; //Used shared_ptr for pybind11...
+	//Used shared_ptr for pybind11...
+	shared_ptr<std::array<bool, cst::pixelCount>> validityMask; 
+
 	PyramidLevel<cst::pixelCount> l1;
 	PyramidLevel<cst::pixelCountL2> l2;
 	PyramidLevel<cst::pixelCountL3> l3;

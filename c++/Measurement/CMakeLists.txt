@@ -32,7 +32,6 @@ link_directories("C:/Program Files/OpenNI2/Lib" ${CUDAToolkit_LIBRARY_DIR})
 #    "PrimeSenseVideoStreamListener.h" 
 #    "Structs.h"
 #    "KinectFusion.h"
-#    "ImageData.h"
 #    "kernel.cu"
 #    "ProcessedFrameQueue.h"
 #    "Constants.h" 
@@ -51,7 +50,7 @@ target_sources(MeasurementModule PRIVATE
     "PrimeSenseVideoStreamListener.h"
     "Structs.h"
     "KinectFusion.h"
-    "ImageData.h"
+    
     "kernel.cu"
     "ProcessedFrameQueue.h"
     "Constants.h"

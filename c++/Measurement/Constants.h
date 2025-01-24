@@ -1,6 +1,7 @@
 #pragma once
+//TODO everything more or less
 namespace ScanMoCap {
-	const unsigned int pixelCount = 76800; //TODO Also defined in "this"...
+	const unsigned int pixelCount = 76800; 
 	const unsigned int pixelCountL2 = unsigned int(0.25f * float(pixelCount));
 	const unsigned int pixelCountL3 = unsigned int(0.25f * float(pixelCountL2));
 

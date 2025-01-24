@@ -29,6 +29,7 @@ __global__ void BilateralFiltering(
 
     const uint16_t centerValue = depthImage[globalY * width + globalX];
 
+    //Invalid depth value
     if (centerValue == 0)
     {
         vertexValidityMask[globalY * width + globalX] = false;

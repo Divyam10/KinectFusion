@@ -67,7 +67,7 @@ public:
         if (queue.empty())
         {
             PySys_WriteStdout("THIS IS REALLY TERRIBLE! no frames in queue\n");
-            return ProcessedFrame(); // Return default object if queue is empty
+            return ProcessedFrame(); // TODO ? Return default object if queue is empty
         }
             
         ProcessedFrame item = queue.front();
@@ -83,6 +83,7 @@ public:
 private:
     // Singleton Instance
     static std::shared_ptr<ProcessedFrameQueue> instance;
+
     // Thread safe init
     static std::once_flag initFlag;  
 
@@ -97,7 +98,7 @@ private:
     unsigned int queueSize;
 };
 
-// Define the static instance pointer and once_flag
+// Static instance pointer & once_flag
 std::shared_ptr<ProcessedFrameQueue> ProcessedFrameQueue::instance = nullptr;
 std::once_flag ProcessedFrameQueue::initFlag;
 

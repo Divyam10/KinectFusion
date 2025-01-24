@@ -9,7 +9,6 @@
 #include <memory>
 #include <atomic>
 #include <future>
-#include "ImageData.h"
 #include <cuda_runtime.h>
 #include <device_launch_parameters.h>
 #include <cuda.h>
@@ -74,14 +73,11 @@ public:
 
 	shared_ptr<ProcessedFrameQueue> processedFramesQueue; // Shared -> NEEDS to be copyable for python / pybind
 
-	VideoMode depthVideoMode;
-	PixelFormat pixelFormatColor;
-	PixelFormat pixelFormatDepth;
-	//unsigned int width = 0;
-	//unsigned int height = 0;
-	//unsigned int pixelCount = 0;
-	unsigned int maxDepth = 0;
-	unsigned int minDepth = 0;
+	VideoMode depthVideoMode; // TODO should be treated the same as constants...
+	PixelFormat pixelFormatColor; // TODO should be treated the same as constants...
+	PixelFormat pixelFormatDepth; // TODO should be treated the same as constants...
+	unsigned int maxDepth = 0; // TODO should be treated the same as constants...
+	unsigned int minDepth = 0; // TODO should be treated the same as constants...
 	array<float, 9> K_inv;
 	const unsigned int queueSizeLimit = 30; //Adjustable!
 	mutex frame_queue_mtx;
@@ -89,8 +85,8 @@ public:
 	thread processingThread;
 	condition_variable frame_cv;
 	atomic<bool>& isRunning;
-	const unsigned int sigmaSpatial = 5; //TODO might move out of this function, should be the same across program!
-	const int sigmaRange = 50; //TODO might move out of this function,should be the same across program!
+	const unsigned int sigmaSpatial = 5;  //Adjustable!
+	const int sigmaRange = 50;  //Adjustable!
 
 	KinectFusion(
 		atomic<bool>& isRunning,
@@ -99,16 +95,10 @@ public:
 		depthFrameQueue(make_shared<queue<unique_ptr<VideoFrameRef>>>()),
 		frameTupleQueue(make_unique<queue<unique_ptr<FrameTuple>>>()),
 		isRunning(isRunning),
-		/*
-		processedFramesQueue(
-			make_shared<MutexQueue<ProcessedFrame>>(
-				this->isRunning,
-				pythonCallback,
-				this->queueSizeLimit) //Might give this separate limit
-		){}
-		*/
+
 		//Init Queue Singleton
 		processedFramesQueue(ProcessedFrameQueue::Init(isRunning, pythonCallback, queueSizeLimit)) {};
+
 
 	~KinectFusion() 
 	{
@@ -129,6 +119,7 @@ public:
 
 		OpenNI::shutdown();
 	}
+
 
 	//Call this from another thread
 	void Init(promise<void>& initPromise)
@@ -156,6 +147,7 @@ public:
 		}
 		PySys_WriteStdout("Device Init Succesfull!\n");
 	}
+
 
 	/**
 	* This function gets called once the Device is found.
@@ -185,9 +177,6 @@ public:
 
 		//TODO camera exposure??
 		this->depthVideoMode = videoDepthStream->getVideoMode();
-		//this->width = this->depthVideoMode.getResolutionX();
-		//this->height = this->depthVideoMode.getResolutionY();
-		//this->pixelCount = width * height;
 		this->maxDepth = videoDepthStream->getMaxPixelValue();
 		this->minDepth = videoDepthStream->getMinPixelValue();
 
@@ -219,9 +208,8 @@ public:
 
 		if (device.setImageRegistrationMode(IMAGE_REGISTRATION_DEPTH_TO_COLOR) != STATUS_OK)
 			throw runtime_error("No ImageRegistrationMode Possible..." + string(OpenNI::getExtendedError()));
-
-
 	}
+
 
 	/**
 	* This function is called once a depth or color frame is received from the device and added to the respective queue.
@@ -272,7 +260,7 @@ public:
 			//TODO probably removable
 			if (frameDiff != 0)
 			{
-				cout << "WTF Bruh" << endl;
+				cout << "FrameDiff != 0!" << endl;
 				return;
 			}
 
@@ -292,8 +280,8 @@ public:
 			//Notify 1 (of the) processing Thread(s)
 			frame_cv.notify_one();
 		}
-		
 	}
+
 
 	void ProcessFrames()
 	{
@@ -317,23 +305,22 @@ public:
 
 				currentFrame = move(frameTupleQueue->front());
 				frameTupleQueue->pop();
-			}
-			
+			}	
 			this->ProcessFrame(move(currentFrame));
 		}
 	}
 
+
+	/*
+	*   320 × 240 resolution, 76800 pixels in both color & depth
+	*   RGB888 = 3 bytes (rgb) per pixel
+	*   Each index is R->G->B->R...
+	*   PIXEL_FORMAT_DEPTH_1_MM(?) -> Resolution of Data in mm
+	*   2 Bytes to store max common sensor distances, each index is depth value
+	*/
 	void ProcessFrame(unique_ptr<FrameTuple> frame)
 	{
-		PySys_WriteStdout("Processing Frame\n");
-		//320 × 240 resolution, 76800 pixels in both color & depth
-		//RGB888 = 3 bytes (rgb) per pixel
-		//Each index is R->G->B->R...
-		// PIXEL_FORMAT_DEPTH_1_MM(?) -> Resolution of Data in mm
-		//2 Bytes to store max common sensor distances, each index is depth value
-		//const uint16_t* depthImage = reinterpret_cast<const uint16_t*>(frame->depthFrame->getData());
-		//uint16_t* depthImageFiltered = new uint16_t[pixelCount];
-		
+		PySys_WriteStdout("Processing Frame\n");		
 
 		//Copy original data
 		shared_ptr<array<uint16_t, cst::pixelCount>> depthImage = make_shared<array<uint16_t, cst::pixelCount>>();
@@ -344,11 +331,10 @@ public:
 		shared_ptr<array<uint16_t, cst::pixelCountXYZ>> vertexMap = make_shared<array<uint16_t, cst::pixelCountXYZ>>();
 
 		shared_ptr<array<bool, cst::pixelCount>> vertexValidityMask = make_shared<array<bool, cst::pixelCount>>();
+
 		//Init all vertices as valid
 		vertexValidityMask->fill(true); 
 
-
-		//Blocking CUDA function
 		//TODO adjust kernels to ignore invalid depths using vertexValidityMap
 		LaunchBilateralFilteringKernel(
 			depthImage->data(),
@@ -371,7 +357,7 @@ public:
 			cst::height,
 			cst::stride);
 
-		//Calculate L=3: DepthImagePyramid, VertexMapPyramid and NormalMapPyramid
+		//TODO move this inside functions probably
 		const unsigned int blockSize = 2;
 
 		shared_ptr<array<uint16_t, cst::pixelCountL2>> depthImageFilteredL2 = make_shared<array<uint16_t, cst::pixelCountL2>>();
@@ -450,7 +436,6 @@ public:
 			cst::stride
 		);
 
-		//TODO check if this should be a pointer
 		processedFramesQueue->Push(
 			ProcessedFrame
 			{
@@ -475,18 +460,5 @@ public:
 				}
 			}
 		);
-
-
-		//TODO 
-		// Queue: make mutex internal (maybe remove cv?
-		// Copy queue size limit as done before with mutex to remove/add
-		// 
-		//Expose Queue.pop to python, not queue.
-		//Call this func on python callback
-		//
-		//MAYBE: Have function in c++ wait for frames (as is hypothetically implemented in queue) then call python cb
-
-		
 	}
-
 };

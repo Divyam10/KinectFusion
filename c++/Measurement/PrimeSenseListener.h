@@ -25,15 +25,6 @@ public:
 		cout << deviceInfo->getUsbProductId() << std::endl;
 		cout << deviceInfo->getUsbVendorId() << std::endl;
 
-		//TODO enable
-		/*
-		if (deviceInfo->getVendor() != "PrimeSense")
-		{
-			cout << "Found unrelated device." << endl;
-			return;
-		}
-		*/
-
 		auto status = device->open(deviceInfo->getUri());
 
 		if (status != Status::STATUS_OK)
