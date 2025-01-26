@@ -2,7 +2,8 @@
 
 project("Measurement" LANGUAGES CXX CUDA)
 
-set(Libs "C:/Users/steph/Documents/Projekte/KinectFusion/c++/Libs")
+set(Libs ${CMAKE_SOURCE_DIR}/Libs)
+
 set(CMAKE_PREFIX_PATH "${Libs}/pybind11")
 set(PYBIND11_FINDPYTHON ON)
 
@@ -17,26 +18,13 @@ set(CMAKE_CUDA_FLAGS_DEBUG "${CMAKE_CUDA_FLAGS_DEBUG} -G -g")
 
 # Include directories
 include_directories(
-    "C:/Program Files/OpenNI2/Include",  # TODO install in libs folder
+    "${Libs}/OpenNI2/Include",
     ${CUDAToolkit_INCLUDE_DIRS},
     "${Libs}/eigen-3.4.0",
     "${Libs}/pybind11-master/include"
 )
 
-link_directories("C:/Program Files/OpenNI2/Lib" ${CUDAToolkit_LIBRARY_DIR})
-
-# Create the main executable
-#add_executable(measurement_executable 
-#    "Measurement.h"
-#    "PrimeSenseListener.h"
-#    "PrimeSenseVideoStreamListener.h" 
-#    "Structs.h"
-#    "KinectFusion.h"
-#    "kernel.cu"
-#    "ProcessedFrameQueue.h"
-#    "Constants.h" 
-#)
-#target_link_libraries(measurement_executable PRIVATE OpenNI2 CUDA::cudart)
+link_directories("${Libs}/OpenNI2/Lib" ${CUDAToolkit_LIBRARY_DIR})
 
 # Create the Pybind11 module
 pybind11_add_module(MeasurementModule MODULE Bindings.cpp)
@@ -49,28 +37,15 @@ target_sources(MeasurementModule PRIVATE
     "PrimeSenseListener.h"
     "PrimeSenseVideoStreamListener.h"
     "Structs.h"
-    "KinectFusion.h"
-    
+    "KinectFusion.h"   
     "kernel.cu"
     "ProcessedFrameQueue.h"
-    "Constants.h"
-    
+    "Constants.h"  
 )
 
-# Gathers all files in Redist
-set(OPENNI2_SOURCE_DIR "C:/Program Files/OpenNI2/Redist")
-file(GLOB_RECURSE OPENNI2_FILES RELATIVE ${OPENNI2_SOURCE_DIR} "${OPENNI2_SOURCE_DIR}/*")
-
-# Copy files to the destination directory after build
-foreach(FILE ${OPENNI2_FILES})
-    set(SOURCE_PATH "${OPENNI2_SOURCE_DIR}/${FILE}")
-    add_custom_command(TARGET MeasurementModule POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${SOURCE_PATH}" "${CMAKE_BINARY_DIR}/$<CONFIG>/${FILE}"
-    )
-endforeach()
-
-# Create Module
-install(TARGETS MeasurementModule DESTINATION .)
-
-# TODO maybe transfer cuda and openni2 dlls to module location
+# Install to different folders
+#install(TARGETS MeasurementModule
+#    LIBRARY DESTINATION ${CMAKE_INSTALL_PREFIX}/lib  # Shared libraries (.so, .dylib)
+#    ARCHIVE DESTINATION ${CMAKE_INSTALL_PREFIX}/lib  # Static libraries (.a, .lib)
+#    RUNTIME DESTINATION ${CMAKE_INSTALL_PREFIX}/bin  # Runtime DLLs, executables
+#)
