@@ -62,6 +62,7 @@ extern "C" void LaunchNormalMapKernel(
 
 class KinectFusion {
 public:
+	static shared_ptr<KinectFusion> KinectFusion::instance;
 	unique_ptr<Device> device;
 	unique_ptr<VideoStream> videoColorStream;
 	unique_ptr<VideoStream> videoDepthStream;
@@ -79,6 +80,8 @@ public:
 	unsigned int maxDepth = 0; // TODO should be treated the same as constants...
 	unsigned int minDepth = 0; // TODO should be treated the same as constants...
 	array<float, 9> K; //Passed to Python
+	array<float, 9> K2; //Passed to Python
+	array<float, 9> K3; //Passed to Python
 	array<float, 9> K_inv;
 	const unsigned int queueSizeLimit = 30; //Adjustable!
 	mutex frame_queue_mtx;
@@ -98,7 +101,17 @@ public:
 		isRunning(isRunning),
 
 		//Init Queue Singleton
-		processedFramesQueue(ProcessedFrameQueue::Init(isRunning, pythonCallback, queueSizeLimit)) {};
+		processedFramesQueue(ProcessedFrameQueue::Init(isRunning, pythonCallback, queueSizeLimit))
+	{
+		//TODO REALLY REALLY UGLY NO SAFEGUARDS
+		if (instance != nullptr)
+		{
+			throw runtime_error("Based Singleton Error");
+			return;
+		}
+
+		instance = shared_ptr<KinectFusion>(this);
+	};
 
 
 	~KinectFusion() 
@@ -192,12 +205,25 @@ public:
 			0.0, focalY, princPointY,
 			0.0, 0.0, 1.0;
 
+		Eigen::Matrix3f K2;
+		K2 << 0.5f * focalX, 0.f, princPointX * 0.5f,
+			0.0, 0.5f * focalY, princPointY * 0.5f,
+			0.0, 0.0, 1.0;
+
+		Eigen::Matrix3f K3;
+		K3 << 0.25f * focalX, 0.f, princPointX * 0.25f,
+			0.0, 0.25f * focalY, princPointY * 0.25f,
+			0.0, 0.0, 1.0;
+
 		auto KInv = K.inverse().eval();
 
 		for (int i = 0; i < 9; ++i) {
 			this->K_inv[i] = KInv(i / 3, i % 3);
+
 			// Pass K to Python
 			this->K[i] = K(i / 3, i % 3);
+			this->K2[i] = K2(i / 3, i % 3);
+			this->K3[i] = K3(i / 3, i % 3);
 		}
 
 		//Start Frame Processing Thread
@@ -464,4 +490,34 @@ public:
 			}
 		);
 	}
+
+	//TODO cleanup lol
+	static array<float, 9> getK() {
+		if (instance->K[0] != 0)
+			PySys_WriteStdout("K0!\n");
+		return instance->K;
+	}
+
+	static array<float, 9> getK2() {
+		if (instance->K2[0] != 0)
+			PySys_WriteStdout("K2!\n");
+		return instance->K2;
+	}
+
+	static array<float, 9> getK3() {
+		if (instance->K3[0] != 0)
+			PySys_WriteStdout("K3!\n");
+		return instance->K3;
+	}
+
+	static int getMinDepth() {
+		return int(instance->minDepth);
+	}
+
+	static int getMaxDepth() {
+		return int(instance->maxDepth);
+	}
 };
+
+//Static init
+shared_ptr<KinectFusion> KinectFusion::instance = nullptr;

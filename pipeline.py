@@ -1,21 +1,15 @@
 import os
 import time
 import numpy as np
-import matplotlib.pyplot as plt
 import torch
 import imageio.v3 as iio
+import matplotlib.pyplot as plt
 import open3d as o3d
+import MeasurementModule
+import threading
 
 from icp.levenberg_marquardt import LM_optimizer
 from icp.icp import ICP
-
-
-DATA_DIR = 'data/rgbd_dataset_freiburg1_desk'
-DATA_PATH = os.path.join(os.getcwd(), DATA_DIR)
-
-depth_file = os.path.join(DATA_PATH, 'depth.txt')
-rgb_file = os.path.join(DATA_PATH, 'rgb.txt')
-trajectory_file = os.path.join(DATA_PATH, 'groundtruth.txt')
 
 if torch.cuda.is_available():
     device = torch.device("cuda")
@@ -23,14 +17,82 @@ elif torch.backends.mps.is_available():
     device = torch.device("mps")
 else:
     device = torch.device("cpu")
-# device = torch.device("cpu")
 
-# define allowed range of depth values in meters
-d_max = 5
-d_min = 0.25
+lock = threading.Lock()
 
-fx, fy, cx, cy = 517.3, 516.5, 318.6, 255.3
-K = torch.tensor([[fx, 0, cx], [0, fy, cy], [0, 0, 1]]).to(device)
+last_frame = None
+d_max = None  # define allowed range of depth values in meters
+d_min = None  # define allowed range of depth values in meters
+fx, fy, cx, cy = None, None, None, None
+K = None
+K_tensor = None
+K_tensor_l2 = None
+K_tensor_l3 = None
+c2w = np.eye(4)  # Assume World coordinates align with first frame camera coord system.
+
+def on_new_frame():
+    global last_frame, dx, fx, fy, cx, cy, K, K_tensor, K_tensor_l2, K_tensor_l3, d_max, d_min, c2w
+    print("called")
+
+    with lock:
+        print("executed")
+        current_frame = None
+
+        if last_frame is None:
+            last_frame = MeasurementModule.PopFrame()
+
+            K = MeasurementModule.Device.K()
+            K2 = MeasurementModule.Device.K2()
+            K3 = MeasurementModule.Device.K3()
+
+            K_tensor = torch.tensor(K).to(device)
+            K_tensor_l2 = torch.tensor(K2).to(device)
+            K_tensor_l3 = torch.tensor(K3).to(device)
+            d_max = MeasurementModule.Device.maxDepth() / 1000
+            d_min = MeasurementModule.Device.minDepth() / 1000
+
+            fx = K[0, 0]
+            fy = K[1, 1]
+            cx = K[0, 2]
+            cy = K[1, 2]
+
+            #  time.sleep(0.1)
+            return
+
+        current_frame = MeasurementModule.PopFrame()
+
+        print("EZZZZZZZZZZZZZZZZZZZZZ")
+
+        #np.set_printoptions(threshold=500)
+        print(current_frame.l3.depth_map.shape)
+        print(last_frame.l3.depth_map.shape)
+
+        print(current_frame.l2.depth_map.shape)
+        print(last_frame.l2.depth_map.shape)
+
+        print(current_frame.l1.depth_map.shape)
+        print(last_frame.l1.depth_map.shape)
+
+        print(K_tensor)
+        print(K_tensor_l2)
+        print(K_tensor_l3)
+
+        print(torch.eye(4).to(device))
+
+        T10 = icp(current_frame.l3.depth_map, last_frame.l3.depth_map, torch.eye(4).to(device), K_tensor_l3)
+        print("Pose after l3:", T10)
+        T20 = icp(current_frame.l2.depth_map, last_frame.l2.depth_map, T10, K_tensor_l2)
+        print("Pose after l2:", T20)
+        T3000 = icp(current_frame.l1.depth_map, last_frame.l1.depth_map, T20, K_tensor)
+        print("Pose after l1:", T3000)
+
+        c2w = c2w @ T3000
+        print(c2w)
+        print("WOWSERS")
+
+
+# Starts Program
+MeasurementModule.Init(on_new_frame)
 
 
 def get_time():
@@ -42,6 +104,58 @@ def get_time():
     return time.time()
 
 
+# def load_K_Rt_from_P(P):
+#     """
+#     modified from IDR https://github.com/lioryariv/idr
+#     """
+#     P = P.detach().cpu().numpy()
+#     out = cv2.decomposeProjectionMatrix(P)
+#     K = out[0]
+#     R = out[1]
+#     t = out[2]
+#
+#     K = K/K[2,2]
+#     intrinsics = np.eye(4)
+#     intrinsics[:3, :3] = K
+#
+#     pose = np.eye(4, dtype=np.float32)
+#     pose[:3, :3] = R.transpose()  # convert from w2c to c2w
+#     pose[:3, 3] = (t[:3] / t[3])[:, 0]
+#
+#     return intrinsics, pose
+
+
+'''
+def quaternion_to_matrix(quaternions: torch.Tensor) -> torch.Tensor:
+    """
+    Convert rotations given as quaternions to rotation matrices.
+
+    Args:
+        quaternions: quaternions with real part first,
+            as tensor of shape (..., 4).
+
+    Returns:
+        Rotation matrices as tensor of shape (..., 3, 3).
+    """
+    qw, qx, qy, qz = torch.unbind(quaternions, -1)
+    two_s = 2.0 / (quaternions * quaternions).sum(-1)
+
+    o = torch.stack(
+        (
+            1 - two_s * (qy * qy + qz * qz),
+            two_s * (qx * qy - qz * qw),
+            two_s * (qx * qz + qy * qw),
+            two_s * (qx * qy + qz * qw),
+            1 - two_s * (qx * qx + qz * qz),
+            two_s * (qy * qz - qx * qw),
+            two_s * (qx * qz - qy * qw),
+            two_s * (qy * qz + qx * qw),
+            1 - two_s * (qx * qx + qy * qy),
+        ),
+        -1,
+    )
+    return o.reshape(quaternions.shape[:-1] + (3, 3))
+    
 def read_data_file(file):
     data = []
     with open(file, 'r') as f:
@@ -76,7 +190,6 @@ def align_data(data_a, data_b, max_diff=0.25):
     return data_a
 
 
-
 def prepare_data(depth_file, rgb_file, trajectory_file):
     depth_data = read_data_file(depth_file)
     rgb_data = read_data_file(rgb_file)
@@ -87,60 +200,7 @@ def prepare_data(depth_file, rgb_file, trajectory_file):
     combined_data = align_data(combined_data, rgb_data)
 
     return combined_data
-
-
-def quaternion_to_matrix(quaternions: torch.Tensor) -> torch.Tensor:
-    """
-    Convert rotations given as quaternions to rotation matrices.
-
-    Args:
-        quaternions: quaternions with real part first,
-            as tensor of shape (..., 4).
-
-    Returns:
-        Rotation matrices as tensor of shape (..., 3, 3).
-    """
-    qw, qx, qy, qz = torch.unbind(quaternions, -1)
-    two_s = 2.0 / (quaternions * quaternions).sum(-1)
-
-    o = torch.stack(
-        (
-            1 - two_s * (qy * qy + qz * qz),
-            two_s * (qx * qy - qz * qw),
-            two_s * (qx * qz + qy * qw),
-            two_s * (qx * qy + qz * qw),
-            1 - two_s * (qx * qx + qz * qz),
-            two_s * (qy * qz - qx * qw),
-            two_s * (qx * qz - qy * qw),
-            two_s * (qy * qz + qx * qw),
-            1 - two_s * (qx * qx + qy * qy),
-        ),
-        -1,
-    )
-    return o.reshape(quaternions.shape[:-1] + (3, 3))
-
-
-# def load_K_Rt_from_P(P):
-#     """
-#     modified from IDR https://github.com/lioryariv/idr
-#     """
-#     P = P.detach().cpu().numpy()
-#     out = cv2.decomposeProjectionMatrix(P)
-#     K = out[0]
-#     R = out[1]
-#     t = out[2]
-#
-#     K = K/K[2,2]
-#     intrinsics = np.eye(4)
-#     intrinsics[:3, :3] = K
-#
-#     pose = np.eye(4, dtype=np.float32)
-#     pose[:3, :3] = R.transpose()  # convert from w2c to c2w
-#     pose[:3, 3] = (t[:3] / t[3])[:, 0]
-#
-#     return intrinsics, pose
-
-
+    
 def read_data(data, index):
     assert index < len(data)
 
@@ -174,6 +234,9 @@ def read_data(data, index):
 
     return depth, rgb, c2w
 
+'''
+
+
 def plot_3d_figure(point_cloud, normals, colors_np):
     point_cloud_np = point_cloud.view(-1, 3).cpu().numpy()
     normals_np = normals.view(-1, 3).cpu().numpy()
@@ -192,40 +255,26 @@ def plot_3d_figure(point_cloud, normals, colors_np):
     return pcd
 
 
-data = prepare_data(depth_file, rgb_file, trajectory_file)
 optimizer = LM_optimizer(max_iterations=5)
 icp = ICP(optimizer=None, occlusion_threshold=0.1, symmetric_error=True)
 
-depth, rgb, c2w = read_data(data, 0)
-H, W = depth.shape
+# depth, rgb, c2w = read_data(data, 0)
+# H, W = depth.shape
 
-vertices = ICP.compute_vertices(depth, K)
-normals = ICP.compute_normals(vertices)
-colors = np.array([1, 0, 0]).reshape(1, 3).repeat(H*W, axis=0)
+# vertices = ICP.compute_vertices(depth, K)
+# normals = ICP.compute_normals(vertices)
+# colors = np.array([1, 0, 0]).reshape(1, 3).repeat(H*W, axis=0)
 
-R = c2w[:3, :3]
-t = c2w[:3, -1]
-vertices = torch.matmul(vertices, R.T) + t
-pcd = plot_3d_figure(vertices, normals, colors)
+# R = c2w[:3, :3]
+# t = c2w[:3, -1]
+# vertices = torch.matmul(vertices, R.T) + t
+# pcd = plot_3d_figure(vertices, normals, colors)
 
-time_list, c2w_list, c2w_gt_list = list(), list(), list()
-for i in range(1, len(data[:50])):
-    depth1, rgb1, c2w1 = read_data(data, i)
-    t0 = get_time()
 
-    T10 = icp(depth1, depth, torch.eye(4).to(device), K)
+# c2w_list += [c2w.cpu().numpy()]
+# c2w_gt_list += [c2w1.cpu().numpy()]
 
-    c2w = c2w @ T10
-
-    t1 = get_time()
-    time_list += [t1 - t0]
-    print("processed frame: {:d}, time taken: {:f}s".format(i, t1 - t0))
-
-    depth = depth1
-
-    c2w_list += [c2w.cpu().numpy()]
-    c2w_gt_list += [c2w1.cpu().numpy()]
-
+'''
 avg_time = np.array(time_list).mean()
 print("average processing time: {:f}s per frame, i.e. {:f} fps".format(avg_time, 1. / avg_time))
 
@@ -259,3 +308,4 @@ vertices1 = torch.matmul(vertices1, R.T) + t
 pcd1 = plot_3d_figure(vertices1, normals1, colors1)
 
 o3d.visualization.draw_geometries([pcd, pcd1], point_show_normal=False)
+'''
