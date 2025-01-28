@@ -18,3 +18,11 @@ Libs/
 .DS_Store
 
 data/rgbd_dataset_freiburg1_desk
+
+# Windows libs and compiled shared lib
+OpenNI2/
+cudart64_12.dll
+MeasurementModule.cp311-win_amd64.pyd
+OpenNI2.dll
+
+
