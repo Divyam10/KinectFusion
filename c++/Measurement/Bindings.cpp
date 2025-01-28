@@ -60,4 +60,7 @@ PYBIND11_MODULE(MeasurementModule, m) {
             Starts the C++ program with a Python callback function.
             The callback is executed from within the C++ program when a new frame gets pushed to the framequeue.
     )pbdoc");
+
+    py::class_<KinectFusion>(m, "Device")
+        .def_property_readonly("K", [](const KinectFusion& self) { return Array2Numpy(self.K, 3, 3); });
 }

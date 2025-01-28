@@ -78,6 +78,7 @@ public:
 	PixelFormat pixelFormatDepth; // TODO should be treated the same as constants...
 	unsigned int maxDepth = 0; // TODO should be treated the same as constants...
 	unsigned int minDepth = 0; // TODO should be treated the same as constants...
+	array<float, 9> K; //Passed to Python
 	array<float, 9> K_inv;
 	const unsigned int queueSizeLimit = 30; //Adjustable!
 	mutex frame_queue_mtx;
@@ -186,15 +187,17 @@ public:
 		const float princPointY = float(cst::height / 2);
 
 		//Create inverse of intrinsic K as 1D array
-		Eigen::Matrix3f tempK;
-		tempK << focalX, 0.f, princPointX,
+		Eigen::Matrix3f K;
+		K << focalX, 0.f, princPointX,
 			0.0, focalY, princPointY,
 			0.0, 0.0, 1.0;
 
-		tempK = tempK.inverse().eval();
+		auto KInv = K.inverse().eval();
 
 		for (int i = 0; i < 9; ++i) {
-			this->K_inv[i] = tempK(i / 3, i % 3); 
+			this->K_inv[i] = KInv(i / 3, i % 3);
+			// Pass K to Python
+			this->K[i] = K(i / 3, i % 3);
 		}
 
 		//Start Frame Processing Thread
