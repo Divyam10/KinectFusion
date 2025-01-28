@@ -9,3 +9,12 @@ venv/
 *.vs
 # Ignore local
 Libs/
+.venv
+
+.idea
+
+**/__pycache__/
+
+.DS_Store
+
+data/rgbd_dataset_freiburg1_desk
