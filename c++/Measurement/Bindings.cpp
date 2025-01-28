@@ -62,5 +62,7 @@ PYBIND11_MODULE(MeasurementModule, m) {
     )pbdoc");
 
     py::class_<KinectFusion>(m, "Device")
-        .def_property_readonly("K", [](const KinectFusion& self) { return Array2Numpy(self.K, 3, 3); });
+        .def_property_readonly("K", [](const KinectFusion& self) { return Array2Numpy(self.K, 3, 3); })
+        .def_property_readonly("maxDepth", [](const KinectFusion& self) { return self.maxDepth; })
+        .def_property_readonly("minDepth", [](const KinectFusion& self) { return self.minDepth; });
 }
