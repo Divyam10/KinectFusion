@@ -55,11 +55,17 @@ __global__ void BilateralFiltering(
             const int neighborGloablIdx = neighborY * width + neighborX;
             const uint16_t neighborValue = depthImage[neighborGloablIdx];
 
+            //Invalid depth value
+            if (neighborValue == 0)
+            {
+                continue;
+            }
+
             const double t_spatial_squared = double((xOff * xOff) + (yOff * yOff));
             const double t_range_squared = double((centerValue - neighborValue) * (centerValue - neighborValue));
 
-            const double spatialWeight = exp(-0.5f * t_spatial_squared * spatialFactor);
-            const double rangeWeight = exp(-0.5f * t_range_squared * rangeFactor);
+            const double spatialWeight = exp(-0.5 * t_spatial_squared * spatialFactor);
+            const double rangeWeight = exp(-0.5 * t_range_squared * rangeFactor);
 
 
             const double weight = spatialWeight * rangeWeight;
@@ -200,6 +206,7 @@ __global__ void BackProjection(
         return;
     }
 
+    //Invalid Depth values give a Point (0, 0, 0)
     const float pixelDepthValue = float(depthImageFiltered[pixelV * width + pixelU]);
     const float newX = pixelDepthValue * (K_inv[0] * float(pixelU) + K_inv[2]);
     const float newY = pixelDepthValue * (K_inv[4] * float(pixelV) + K_inv[5]);
@@ -313,6 +320,7 @@ __global__ void BlockAveragingAndSubsampling(
 {
     const unsigned int globalX = threadIdx.x + blockIdx.x * blockDim.x;
     const unsigned int globalY = threadIdx.y + blockIdx.y * blockDim.y;
+
     const int similarDepthRange = 3.f * float(sigmaRange);
 
 
@@ -327,6 +335,7 @@ __global__ void BlockAveragingAndSubsampling(
     {
         return;
     }
+
     //Assume they use top left pixel as "central pixel". Could also be using precalc. mean?
     const uint16_t topLeftValue = depthImage[globalY * width + globalX];
     const uint16_t topRightValue = depthImage[globalY * width + globalX + 1];
@@ -336,23 +345,27 @@ __global__ void BlockAveragingAndSubsampling(
     unsigned int sum = 0;
     float norm = 0.f;
 
-    sum += topLeftValue;
-    norm++;
+    //Ignore invalid depth value in norm
+    if (topLeftValue > 0)
+    {
+        sum += topLeftValue;
+        norm++;
+    }
 
-    if (abs(topRightValue - topLeftValue) <= similarDepthRange) {
+    if (topRightValue > 0 && abs(topRightValue - topLeftValue) <= similarDepthRange) {
         sum += topRightValue;
         norm++;
     }
-    if (abs(bottomLeftValue - topLeftValue) <= similarDepthRange) {
+    if (bottomLeftValue > 0 && abs(bottomLeftValue - topLeftValue) <= similarDepthRange) {
         sum += bottomLeftValue;
         norm++;
     }
-    if (abs(bottomRightValue - topLeftValue) <= similarDepthRange) {
+    if (bottomRightValue > 0 && abs(bottomRightValue - topLeftValue) <= similarDepthRange) {
         sum += bottomRightValue;
         norm++;
     }
 
-    const uint16_t average = (norm > 0) ? uint16_t(float(topLeftValue + topRightValue + bottomLeftValue + bottomRightValue) / norm) : 0;
+    const uint16_t average = (norm > 0) ? uint16_t(float(sum) / norm) : 0;
 
     depthImageAveraged[(globalY / 2) * width + (globalX / 2)] = average;
 }
@@ -443,18 +456,33 @@ __global__ void NormalMap(
         return;
     }
 
+    uint16_t centerValueZ = vertexMap[globalY * width + globalX + 2];
+
+    //Don't calculate normals for invalid Pixels
+    if (centerValueZ == 0)
+    {
+        return;
+    }
+
+    uint16_t rightValueZ = vertexMap[globalY * width + globalX + 5];
+    uint16_t belowValueZ = vertexMap[(globalY + 1) * width + globalX + 2];
+
+
+    //Don't calculate normals with invalid surrounding Pixels
+    if (rightValueZ == 0 || belowValueZ == 0)
+    {
+        return;
+    }
+
     uint16_t centerValueX = vertexMap[globalY * width + globalX];
     uint16_t centerValueY = vertexMap[globalY * width + globalX + 1];
-    uint16_t centerValueZ = vertexMap[globalY * width + globalX + 2];
 
     uint16_t rightValueX = vertexMap[globalY * width + globalX + 3];
     uint16_t rightValueY= vertexMap[globalY * width + globalX + 4];
-    uint16_t rightValueZ = vertexMap[globalY * width + globalX + 5];
 
     //TODO check globalY (not just here)
     uint16_t belowValueX = vertexMap[(globalY + 1) * width + globalX];
     uint16_t belowValueY = vertexMap[(globalY + 1) * width + globalX + 1];
-    uint16_t belowValueZ = vertexMap[(globalY + 1) * width + globalX + 2];
 
     uint16_t xDiffX = rightValueX - centerValueX;
     uint16_t xDiffY = rightValueY - centerValueY;
