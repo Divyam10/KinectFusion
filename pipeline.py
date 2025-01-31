@@ -2,8 +2,6 @@ import os
 import time
 import numpy as np
 import torch
-import imageio.v3 as iio
-import matplotlib.pyplot as plt
 import open3d as o3d
 import MeasurementModule
 import threading
@@ -63,30 +61,30 @@ def on_new_frame():
 
         print("EZZZZZZZZZZZZZZZZZZZZZ")
 
-        #np.set_printoptions(threshold=500)
-        print(current_frame.l3.depth_map.shape)
-        print(last_frame.l3.depth_map.shape)
+        np.set_printoptions(threshold=100000)
+        print(current_frame.l3.depth_map)
+        print(last_frame.l3.depth_map)
 
-        print(current_frame.l2.depth_map.shape)
-        print(last_frame.l2.depth_map.shape)
+        #print(current_frame.l2.depth_map.shape)
+        #print(last_frame.l2.depth_map.shape)
 
-        print(current_frame.l1.depth_map.shape)
-        print(last_frame.l1.depth_map.shape)
+        #print(current_frame.l1.depth_map.shape)
+        #print(last_frame.l1.depth_map.shape)
 
-        print(K_tensor)
-        print(K_tensor_l2)
+        #print(K_tensor)
+        #print(K_tensor_l2)
         print(K_tensor_l3)
 
         print(torch.eye(4).to(device))
 
         T10 = icp(current_frame.l3.depth_map, last_frame.l3.depth_map, torch.eye(4).to(device), K_tensor_l3)
         print("Pose after l3:", T10)
-        T20 = icp(current_frame.l2.depth_map, last_frame.l2.depth_map, T10, K_tensor_l2)
-        print("Pose after l2:", T20)
-        T3000 = icp(current_frame.l1.depth_map, last_frame.l1.depth_map, T20, K_tensor)
-        print("Pose after l1:", T3000)
+        #T20 = icp(current_frame.l2.depth_map, last_frame.l2.depth_map, T10, K_tensor_l2)
+        #print("Pose after l2:", T20)
+        #T3000 = icp(current_frame.l1.depth_map, last_frame.l1.depth_map, T20, K_tensor)
+        #print("Pose after l1:", T3000)
 
-        c2w = c2w @ T3000
+        c2w = c2w @ T10
         print(c2w)
         print("WOWSERS")
 
