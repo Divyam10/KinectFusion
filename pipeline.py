@@ -24,7 +24,7 @@ K, K2, K3 = None, None, None
 K_tensor = None
 K_tensor_l2 = None
 K_tensor_l3 = None
-c2w = torch.tensor(np.eye(4))  # Assume World coordinates align with first frame camera coord system.
+c2w = torch.tensor(np.eye(4), dtype=torch.float32).to(device)  # Assume World coordinates align with first frame camera coord system.
 
 
 def debugRandomImage() -> np.ndarray:
