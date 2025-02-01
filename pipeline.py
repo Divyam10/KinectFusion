@@ -5,6 +5,10 @@ import torch
 # import MeasurementModule
 import threading
 
+import matplotlib
+matplotlib.use('TkAgg')
+from matplotlib import pyplot as plt
+
 from icp.levenberg_marquardt import LM_optimizer
 from icp.icp import ICP
 
@@ -27,19 +31,39 @@ K_tensor_l3 = None
 c2w = torch.tensor(np.eye(4), dtype=torch.float32).to(device)  # Assume World coordinates align with first frame camera coord system.
 
 
-def debugRandomImage() -> np.ndarray:
-    # Set image dimensions
-    width, height = 80, 60
-
+def debugRandomImage(width, height) -> np.ndarray:
     # Generate depth values between 1 and 10,000
     ndarray = np.random.randint(1, 10001, size=(height, width), dtype=np.uint16)
 
     # Randomly set some values to 0 (invalid depth readings)
-    num_invalid = int(0.8 * width * height)  # 10% invalid values
+    num_invalid = int(0.1 * width * height)  # 10% invalid values
     invalid_indices = np.random.choice(width * height, num_invalid, replace=False)
     ndarray.flat[invalid_indices] = 0
-    return ndarray
+    return ndarray/10000
 
+
+def visualize_shift(last_frame, current_frame):
+    # Visualize the last frame and current frame side by side
+    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+
+    # Last frame
+    axes[0].imshow(last_frame, cmap='gray')
+    axes[0].set_title('Last Frame')
+    axes[0].axis('off')
+
+    # Current frame after shift
+    axes[1].imshow(current_frame, cmap='gray')
+    axes[1].set_title('Current Frame (Shifted)')
+    axes[1].axis('off')
+
+    # Difference frame (how much the pixels have shifted)
+    diff_frame = np.abs(current_frame - last_frame)
+    axes[2].imshow(diff_frame, cmap='hot')
+    axes[2].set_title('Difference (Shift Visualization)')
+    axes[2].axis('off')
+
+    plt.tight_layout()
+    plt.show()
 
 def on_new_frame():
     global last_frame, dx, K, K2, K3, K_tensor, K_tensor_l2, K_tensor_l3, d_max, d_min, c2w
@@ -51,7 +75,7 @@ def on_new_frame():
 
         if last_frame is None:
             # last_frame = MeasurementModule.PopFrame()
-            last_frame = debugRandomImage()
+            last_frame = debugRandomImage(80, 60)
 
             # K = MeasurementModule.Device.K()
             # K2 = MeasurementModule.Device.K2()
@@ -72,11 +96,16 @@ def on_new_frame():
             return
 
         # current_frame = MeasurementModule.PopFrame()
-        current_frame = debugRandomImage()
+        shift = 10
+        current_frame = np.zeros_like(last_frame)
+        current_frame[:, shift:] = last_frame[:, :-shift]
+
 
         #T10 = icp(torch.tensor(current_frame.l3.depth_map, dtype=torch.float32).to(device),
         #          torch.tensor(last_frame.l3.depth_map, dtype=torch.float32).to(device), torch.eye(4).to(device),
         #          K_tensor_l3)
+
+        visualize_shift(last_frame, current_frame)
 
         T10 = icp(torch.tensor(current_frame, dtype=torch.float32).to(device),
                   torch.tensor(last_frame, dtype=torch.float32).to(device),
@@ -84,20 +113,18 @@ def on_new_frame():
                   K_tensor_l3)
         print("Pose after l3:", T10)
 
-        '''
-        T20 = icp(current_frame.l2.depth_map, last_frame.l2.depth_map, T10, K_tensor_l2)
-        print("Pose after l2:", T20)
+        #T10 = icp(current_frame.l2.depth_map, last_frame.l2.depth_map, T10, K_tensor_l2)
+        #print("Pose after l2:", T10)
 
-        T30 = icp(current_frame.l1.depth_map, last_frame.l1.depth_map, T20, K_tensor)
-        print("Pose after l1:", T30)
-        '''
+        #T10 = icp(current_frame.l1.depth_map, last_frame.l1.depth_map, T10, K_tensor)
+        #print("Pose after l1:", T10)
 
         c2w = c2w @ T10
         print("C2W!", c2w)
 
 
 optimizer = LM_optimizer(max_iterations=5)
-icp = ICP(optimizer=None, occlusion_threshold=0.1, symmetric_error=True)
+icp = ICP(optimizer=optimizer, occlusion_threshold=1, symmetric_error=True)
 
 # Starts Program
 # MeasurementModule.Init(on_new_frame)
