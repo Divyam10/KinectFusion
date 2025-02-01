@@ -4,8 +4,11 @@ project("Measurement" LANGUAGES CXX CUDA)
 
 set(Libs ${CMAKE_SOURCE_DIR}/Libs)
 
-set(CMAKE_PREFIX_PATH "${Libs}/pybind11")
+#set(CMAKE_PREFIX_PATH "${Libs}/pybind11")
+
 set(PYBIND11_FINDPYTHON ON)
+set(CMAKE_TOOLCHAIN_FILE "C:/Users/steph/Documents/Projekte/vcpkg/scripts/buildsystems/vcpkg.cmake")
+set(pybind11_DIR "C:/Users/steph/Documents/Projekte/vcpkg/installed/x64-windows/share/pybind11")
 
 find_package(CUDAToolkit REQUIRED)
 find_package(Python COMPONENTS Interpreter Development)

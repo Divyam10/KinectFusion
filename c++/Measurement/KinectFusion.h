@@ -304,7 +304,7 @@ public:
 				this->frameTupleQueue->pop();
 			}
 			//TODO ok. here me out. if this is commented out i cant see any output on the python side?
-			PySys_WriteStdout("RawFrame\n");
+			PySys_WriteStdout(".\n");
 
 			//Notify 1 (of the) processing Thread(s)
 			frame_cv.notify_one();
@@ -349,7 +349,7 @@ public:
 	*/
 	void ProcessFrame(unique_ptr<FrameTuple> frame)
 	{
-		PySys_WriteStdout("Processing Frame\n");		
+		//PySys_WriteStdout("Processing Frame\n");		
 
 		//Copy original data
 		shared_ptr<array<uint16_t, cst::pixelCount>> depthImage = make_shared<array<uint16_t, cst::pixelCount>>();
@@ -493,20 +493,14 @@ public:
 
 	//TODO cleanup lol
 	static array<float, 9> getK() {
-		if (instance->K[0] != 0)
-			PySys_WriteStdout("K0!\n");
 		return instance->K;
 	}
 
 	static array<float, 9> getK2() {
-		if (instance->K2[0] != 0)
-			PySys_WriteStdout("K2!\n");
 		return instance->K2;
 	}
 
 	static array<float, 9> getK3() {
-		if (instance->K3[0] != 0)
-			PySys_WriteStdout("K3!\n");
 		return instance->K3;
 	}
 

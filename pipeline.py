@@ -2,8 +2,7 @@ import os
 import time
 import numpy as np
 import torch
-import open3d as o3d
-import MeasurementModule
+# import MeasurementModule
 import threading
 
 from icp.levenberg_marquardt import LM_optimizer
@@ -21,86 +20,89 @@ lock = threading.Lock()
 last_frame = None
 d_max = None  # define allowed range of depth values in meters
 d_min = None  # define allowed range of depth values in meters
-fx, fy, cx, cy = None, None, None, None
-K = None
+K, K2, K3 = None, None, None
 K_tensor = None
 K_tensor_l2 = None
 K_tensor_l3 = None
-c2w = np.eye(4)  # Assume World coordinates align with first frame camera coord system.
+c2w = torch.tensor(np.eye(4))  # Assume World coordinates align with first frame camera coord system.
+
+
+def debugRandomImage() -> np.ndarray:
+    # Set image dimensions
+    width, height = 80, 60
+
+    # Generate depth values between 1 and 10,000
+    ndarray = np.random.randint(1, 10001, size=(height, width), dtype=np.uint16)
+
+    # Randomly set some values to 0 (invalid depth readings)
+    num_invalid = int(0.8 * width * height)  # 10% invalid values
+    invalid_indices = np.random.choice(width * height, num_invalid, replace=False)
+    ndarray.flat[invalid_indices] = 0
+    return ndarray
+
 
 def on_new_frame():
-    global last_frame, dx, fx, fy, cx, cy, K, K_tensor, K_tensor_l2, K_tensor_l3, d_max, d_min, c2w
-    print("called")
+    global last_frame, dx, K, K2, K3, K_tensor, K_tensor_l2, K_tensor_l3, d_max, d_min, c2w
+    # print("called\n")
 
     with lock:
-        print("executed")
+        # print("executed\n")
         current_frame = None
 
         if last_frame is None:
-            last_frame = MeasurementModule.PopFrame()
+            # last_frame = MeasurementModule.PopFrame()
+            last_frame = debugRandomImage()
 
-            K = MeasurementModule.Device.K()
-            K2 = MeasurementModule.Device.K2()
-            K3 = MeasurementModule.Device.K3()
+            # K = MeasurementModule.Device.K()
+            # K2 = MeasurementModule.Device.K2()
+            # K3 = MeasurementModule.Device.K3()
+            K3 = [[22.2976, 0.0000, 40.0000],
+                  [0.0000, 12.5424, 30.0000],
+                  [0.0000, 0.0000, 1.0000]]
 
-            K_tensor = torch.tensor(K).to(device)
-            K_tensor_l2 = torch.tensor(K2).to(device)
+            # K_tensor = torch.tensor(K).to(device)
+            # K_tensor_l2 = torch.tensor(K2).to(device)
             K_tensor_l3 = torch.tensor(K3).to(device)
-            d_max = MeasurementModule.Device.maxDepth() / 1000
-            d_min = MeasurementModule.Device.minDepth() / 1000
-
-            fx = K[0, 0]
-            fy = K[1, 1]
-            cx = K[0, 2]
-            cy = K[1, 2]
+            #d_max = MeasurementModule.Device.maxDepth()
+            d_max = 10000
+            #d_min = MeasurementModule.Device.minDepth()
+            d_min = 0
 
             #  time.sleep(0.1)
             return
 
-        current_frame = MeasurementModule.PopFrame()
+        # current_frame = MeasurementModule.PopFrame()
+        current_frame = debugRandomImage()
 
-        print("EZZZZZZZZZZZZZZZZZZZZZ")
+        #T10 = icp(torch.tensor(current_frame.l3.depth_map, dtype=torch.float32).to(device),
+        #          torch.tensor(last_frame.l3.depth_map, dtype=torch.float32).to(device), torch.eye(4).to(device),
+        #          K_tensor_l3)
 
-        np.set_printoptions(threshold=100000)
-        print(current_frame.l3.depth_map)
-        print(last_frame.l3.depth_map)
-
-        #print(current_frame.l2.depth_map.shape)
-        #print(last_frame.l2.depth_map.shape)
-
-        #print(current_frame.l1.depth_map.shape)
-        #print(last_frame.l1.depth_map.shape)
-
-        #print(K_tensor)
-        #print(K_tensor_l2)
-        print(K_tensor_l3)
-
-        print(torch.eye(4).to(device))
-
-        T10 = icp(current_frame.l3.depth_map, last_frame.l3.depth_map, torch.eye(4).to(device), K_tensor_l3)
+        T10 = icp(torch.tensor(current_frame, dtype=torch.float32).to(device),
+                  torch.tensor(last_frame, dtype=torch.float32).to(device),
+                  torch.eye(4).to(device),
+                  K_tensor_l3)
         print("Pose after l3:", T10)
-        #T20 = icp(current_frame.l2.depth_map, last_frame.l2.depth_map, T10, K_tensor_l2)
-        #print("Pose after l2:", T20)
-        #T3000 = icp(current_frame.l1.depth_map, last_frame.l1.depth_map, T20, K_tensor)
-        #print("Pose after l1:", T3000)
+
+        '''
+        T20 = icp(current_frame.l2.depth_map, last_frame.l2.depth_map, T10, K_tensor_l2)
+        print("Pose after l2:", T20)
+
+        T30 = icp(current_frame.l1.depth_map, last_frame.l1.depth_map, T20, K_tensor)
+        print("Pose after l1:", T30)
+        '''
 
         c2w = c2w @ T10
-        print(c2w)
-        print("WOWSERS")
+        print("C2W!", c2w)
 
+
+optimizer = LM_optimizer(max_iterations=5)
+icp = ICP(optimizer=None, occlusion_threshold=0.1, symmetric_error=True)
 
 # Starts Program
-MeasurementModule.Init(on_new_frame)
-
-
-def get_time():
-    if torch.cuda.is_available():
-        torch.cuda.synchronize()
-    elif torch.backends.mps.is_available():
-        torch.mps.synchronize()
-
-    return time.time()
-
+# MeasurementModule.Init(on_new_frame)
+on_new_frame()  # TODO remove
+on_new_frame()  # TODO remove
 
 # def load_K_Rt_from_P(P):
 #     """
@@ -234,8 +236,7 @@ def read_data(data, index):
 
 '''
 
-
-def plot_3d_figure(point_cloud, normals, colors_np):
+'''def plot_3d_figure(point_cloud, normals, colors_np):
     point_cloud_np = point_cloud.view(-1, 3).cpu().numpy()
     normals_np = normals.view(-1, 3).cpu().numpy()
     # colors_np = colors_np.view(-1, 3).cpu().numpy()
@@ -251,10 +252,7 @@ def plot_3d_figure(point_cloud, normals, colors_np):
     pcd.colors = o3d.utility.Vector3dVector(colors_np)
 
     return pcd
-
-
-optimizer = LM_optimizer(max_iterations=5)
-icp = ICP(optimizer=None, occlusion_threshold=0.1, symmetric_error=True)
+'''
 
 # depth, rgb, c2w = read_data(data, 0)
 # H, W = depth.shape
