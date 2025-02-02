@@ -17,7 +17,7 @@ find_package(pybind11 CONFIG REQUIRED)
 set(CMAKE_CUDA_ARCHITECTURES 60 70 80)
 
 # This enables debugging for CUDA code (and is bad for performance)
-set(CMAKE_CUDA_FLAGS_DEBUG "${CMAKE_CUDA_FLAGS_DEBUG} -G -g")
+#set(CMAKE_CUDA_FLAGS_DEBUG "${CMAKE_CUDA_FLAGS_DEBUG} -G -g")
 
 # Include directories
 include_directories(
