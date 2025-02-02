@@ -87,7 +87,6 @@ class ICP(torch.nn.Module):
                     optimized_parameters, residuals, rank, _ = torch.linalg.lstsq(A, b)
                 pose = self.construct_pose_from_parameters(optimized_parameters)
                 return pose
-
             Jf = self.compute_jacobian(vertices_transformed, normals)
             #residuals[mask] = 0.
             residuals = residuals.view(H*W, 1, 1)
@@ -96,9 +95,11 @@ class ICP(torch.nn.Module):
 
             #Jf[mask] = 0.
             Jf = Jf.view(H*W, 1, -1)
-
+            print("NEXT CALL DOESNT WORK")
             delta_parameters = self.optimizer(residuals, Jf)
+            print("delta_parameters")
             pose = self.exp_se3(delta_parameters) @ pose
+            print(pose)
 
         return pose
 

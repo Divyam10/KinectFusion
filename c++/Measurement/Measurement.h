@@ -10,13 +10,13 @@ using namespace std;
 static void InitKinectFusion(shared_ptr<KinectFusion> kinectFusion, promise<void>& initPromise);
 static void HandleKeyPresses(atomic<bool>& isRunning);
 
+
 /*
 * Called by Python with "OnFrame" Callback
 */
 static int CxxMain(function<void()> pythonCallback) {
-
 	atomic<bool> isRunning = true;
-
+	atomic<bool> isPythonProcessing = false;
 	thread kinectFusionThread;
 	shared_ptr<KinectFusion> kinectFusion;
 	promise<void> initPromise;
@@ -25,7 +25,7 @@ static int CxxMain(function<void()> pythonCallback) {
 	try
 	{
 		//Construct in main thread
-		kinectFusion = make_shared<KinectFusion>(isRunning, pythonCallback);
+		kinectFusion = make_shared<KinectFusion>(isRunning, pythonCallback, isPythonProcessing);
 
 		//Init on worker thread
 		kinectFusionThread = thread(InitKinectFusion, kinectFusion, ref(initPromise));

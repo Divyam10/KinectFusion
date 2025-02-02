@@ -11,7 +11,9 @@ using namespace std;
 class PrimeSenseVideoStreamListener : public VideoStream::NewFrameListener
 {
 public:
-	PrimeSenseVideoStreamListener(function<void()> callback, shared_ptr<queue<unique_ptr<VideoFrameRef>>> frameQueue) : callback(callback), frameQueue(frameQueue) {}
+	PrimeSenseVideoStreamListener(function<void()> callback, shared_ptr<queue<unique_ptr<VideoFrameRef>>> frameQueue) : callback(callback), frameQueue(frameQueue) {
+		
+	}
 
 	function<void()> callback;
 	shared_ptr<queue<unique_ptr<VideoFrameRef>>> frameQueue;

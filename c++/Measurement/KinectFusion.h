@@ -89,19 +89,22 @@ public:
 	thread processingThread;
 	condition_variable frame_cv;
 	atomic<bool>& isRunning;
-	const unsigned int sigmaSpatial = 5;  //Adjustable!
-	const int sigmaRange = 50;  //Adjustable!
+	const unsigned int sigmaSpatial = 10;  //Adjustable!
+	const int sigmaRange = 100;  //Adjustable!
+	atomic<bool>& isPythonProcessing;
 
 	KinectFusion(
 		atomic<bool>& isRunning,
-		function<void()> pythonCallback)
+		function<void()> pythonCallback,
+		atomic<bool>& isPythonProcessing)
 		: colorFrameQueue(make_shared<queue<unique_ptr<VideoFrameRef>>>()),
 		depthFrameQueue(make_shared<queue<unique_ptr<VideoFrameRef>>>()),
 		frameTupleQueue(make_unique<queue<unique_ptr<FrameTuple>>>()),
 		isRunning(isRunning),
+		isPythonProcessing(isPythonProcessing),
 
 		//Init Queue Singleton
-		processedFramesQueue(ProcessedFrameQueue::Init(isRunning, pythonCallback, queueSizeLimit))
+		processedFramesQueue(ProcessedFrameQueue::Init(isRunning, pythonCallback, queueSizeLimit, isPythonProcessing))
 	{
 		//TODO REALLY REALLY UGLY NO SAFEGUARDS
 		if (instance != nullptr)
@@ -306,8 +309,8 @@ public:
 			//TODO ok. here me out. if this is commented out i cant see any output on the python side?
 			PySys_WriteStdout(".\n");
 
-			//Notify 1 (of the) processing Thread(s)
-			frame_cv.notify_one();
+			//Notify the processing Thread(s)
+			frame_cv.notify_all();
 		}
 	}
 
@@ -341,7 +344,7 @@ public:
 
 
 	/*
-	*   320 × 240 resolution, 76800 pixels in both color & depth
+	*   320 ï¿½ 240 resolution, 76800 pixels in both color & depth
 	*   RGB888 = 3 bytes (rgb) per pixel
 	*   Each index is R->G->B->R...
 	*   PIXEL_FORMAT_DEPTH_1_MM(?) -> Resolution of Data in mm
@@ -469,6 +472,7 @@ public:
 			ProcessedFrame
 			{
 				move(vertexValidityMask),
+				move(depthImage),
 				PyramidLevel<cst::pixelCount>
 				{
 					move(depthImageFiltered),
@@ -510,6 +514,15 @@ public:
 
 	static int getMaxDepth() {
 		return int(instance->maxDepth);
+	}
+
+	static void SetCXXRunning(bool isRunning) {
+		instance->isRunning = isRunning;
+	}
+
+	// TODO I think this should always set it to false when its done...
+	static void SetPythonProcessing(bool isProcessing) {
+		instance->isPythonProcessing = isProcessing;
 	}
 };
 

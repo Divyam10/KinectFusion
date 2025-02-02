@@ -100,7 +100,7 @@ extern "C" void LaunchBilateralFilteringKernel(
     const unsigned int sigmaSpatial,
     const unsigned int sigmaRange)
 {
-    const unsigned int kernelSize = 21;
+    const unsigned int kernelSize = 42;
 
     const double spatialFactor = 1.0 / double(sigmaSpatial * sigmaSpatial);
     const double rangeFactor = 1.0 / double(sigmaRange * sigmaRange);
@@ -318,40 +318,37 @@ __global__ void BlockAveragingAndSubsampling(
     const unsigned int sigmaRange,
     const unsigned int blockSize)
 {
+    // Global coordinates of the current thread in lower dim image
     const unsigned int globalX = threadIdx.x + blockIdx.x * blockDim.x;
     const unsigned int globalY = threadIdx.y + blockIdx.y * blockDim.y;
 
-    const int similarDepthRange = 3.f * float(sigmaRange);
-
-
-    // Return if pixel is out of bounds
-    if (globalX >= width || globalY >= height) 
+    // Skip if we're out of bounds
+    if (globalX >= width - 1 || globalY >= height - 1)
     {
         return;
     }
 
-    //TODO instead use less threads
-    if (globalX % 2 != 0 || globalY % 2 != 0)
-    {
-        return;
-    }
+    // Calculate the similar depth range threshold based on sigmaRange
+    const int similarDepthRange = 3 * sigmaRange;  
 
-    //Assume they use top left pixel as "central pixel". Could also be using precalc. mean?
-    const uint16_t topLeftValue = depthImage[globalY * width + globalX];
-    const uint16_t topRightValue = depthImage[globalY * width + globalX + 1];
-    const uint16_t bottomLeftValue = depthImage[(globalY + 1) * width + globalX];
-    const uint16_t bottomRightValue = depthImage[(globalY + 1) * width + globalX + 1];
+    const unsigned int globalX_original = globalX * 2;
+    const unsigned int globalY_original = globalY * 2;
+    const unsigned int width_original = width * 2;
+
+    // Get the 2x2 block of pixels centered on (globalX, globalY)
+    const uint16_t topLeftValue = depthImage[globalY_original * width_original + globalX_original];
+    const uint16_t topRightValue = depthImage[globalY_original * width_original + globalX_original + 1];
+    const uint16_t bottomLeftValue = depthImage[(globalY_original + 1) * width_original + globalX_original];
+    const uint16_t bottomRightValue = depthImage[(globalY_original + 1) * width_original + globalX_original + 1];
 
     unsigned int sum = 0;
     float norm = 0.f;
 
-    //Ignore invalid depth value in norm
-    if (topLeftValue > 0)
-    {
+    // Ignore invalid depth values
+    if (topLeftValue > 0) {
         sum += topLeftValue;
         norm++;
     }
-
     if (topRightValue > 0 && abs(topRightValue - topLeftValue) <= similarDepthRange) {
         sum += topRightValue;
         norm++;
@@ -365,10 +362,13 @@ __global__ void BlockAveragingAndSubsampling(
         norm++;
     }
 
+    // Calculate the average of the block
     const uint16_t average = (norm > 0) ? uint16_t(float(sum) / norm) : 0;
 
-    depthImageAveraged[(globalY / 2) * width + (globalX / 2)] = average;
+    // Write the averaged value to the downsampled image (each thread writes to every second pixel)
+    depthImageAveraged[globalY * width + globalX] = average;
 }
+
 
 
 extern "C" void LaunchBlockAveragingAndSubsampleKernel(
@@ -382,8 +382,8 @@ extern "C" void LaunchBlockAveragingAndSubsampleKernel(
     const unsigned int sigmaRange)
 {
     const dim3 threadsPerBlock(16, 16);
-    const dim3 numBlocks((widthL + threadsPerBlock.x - 1) / threadsPerBlock.x,
-        (heightL + threadsPerBlock.y - 1) / threadsPerBlock.y);
+    const dim3 numBlocks((widthL/2 + threadsPerBlock.x - 1) / threadsPerBlock.x,
+        (heightL/2 + threadsPerBlock.y - 1) / threadsPerBlock.y);
 
     uint16_t* d_depthImageL;
     uint16_t* d_depthImageLAveraged;
@@ -413,7 +413,7 @@ extern "C" void LaunchBlockAveragingAndSubsampleKernel(
     }
 
     // Launch the BlockAveragingAndSubsampling kernel
-    BlockAveragingAndSubsampling <<< numBlocks, threadsPerBlock >>> (d_depthImageL, d_depthImageLAveraged, widthL, heightL, sigmaRange, blockSize);
+    BlockAveragingAndSubsampling <<< numBlocks, threadsPerBlock >>> (d_depthImageL, d_depthImageLAveraged, widthL/2, heightL/2, sigmaRange, blockSize);
 
     err = cudaDeviceSynchronize();
     if (err != cudaSuccess) {

@@ -1,12 +1,12 @@
 import os
 import time
+from datetime import datetime
+
 import numpy as np
 import torch
-# import MeasurementModule
+import MeasurementModule
 import threading
 
-import matplotlib
-matplotlib.use('TkAgg')
 from matplotlib import pyplot as plt
 
 from icp.levenberg_marquardt import LM_optimizer
@@ -25,10 +25,10 @@ last_frame = None
 d_max = None  # define allowed range of depth values in meters
 d_min = None  # define allowed range of depth values in meters
 K, K2, K3 = None, None, None
-K_tensor = None
+K_tensor_l1 = None
 K_tensor_l2 = None
 K_tensor_l3 = None
-c2w = torch.tensor(np.eye(4), dtype=torch.float32).to(device)  # Assume World coordinates align with first frame camera coord system.
+c2w = None
 
 
 def debugRandomImage(width, height) -> np.ndarray:
@@ -39,10 +39,30 @@ def debugRandomImage(width, height) -> np.ndarray:
     num_invalid = int(0.1 * width * height)  # 10% invalid values
     invalid_indices = np.random.choice(width * height, num_invalid, replace=False)
     ndarray.flat[invalid_indices] = 0
-    return ndarray/10000
+    return ndarray / 10000
 
 
-def visualize_shift(last_frame, current_frame):
+import os
+import numpy as np
+import matplotlib.pyplot as plt
+from datetime import datetime
+
+
+def visualize_shift(last_frame, current_frame, suffix=""):
+    # Validate that frames are not None or empty
+    if last_frame is None or current_frame is None:
+        print("Error: One of the frames is None.")
+        return
+
+    if last_frame.size == 0 or current_frame.size == 0:
+        print("Error: One of the frames is empty.")
+        return
+
+    # Use a non-interactive backend to avoid GUI issues
+    plt.switch_backend('Agg')  # 'Agg' is a non-GUI backend suitable for saving images
+
+    print("Creating the visualization...")  # Debugging print
+
     # Visualize the last frame and current frame side by side
     fig, axes = plt.subplots(1, 3, figsize=(15, 5))
 
@@ -63,73 +83,90 @@ def visualize_shift(last_frame, current_frame):
     axes[2].axis('off')
 
     plt.tight_layout()
-    plt.show()
+    plt.suptitle('Simulated Depth Map')
+
+    # Get current time for filename
+    current_time = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+
+    # Save the visualization to a file
+    save_dir = "C:/Users/steph/Documents/Projekte/KinectFusion/"
+    if not os.path.exists(save_dir):
+        print(f"Error: The directory {save_dir} does not exist.")
+        return
+
+    full_filename = os.path.join(save_dir, f"diff_map_{current_time}{suffix}.png")
+
+    try:
+        print(f"Saving visualization to {full_filename}")  # Debugging print
+        plt.savefig(full_filename)
+        print(f"Visualization saved successfully at {full_filename}")  # Success message
+    except Exception as e:
+        print(f"Error saving image: {e}")
+
+    # Close the plot to avoid memory issues
+    plt.close()
+
 
 def on_new_frame():
-    global last_frame, dx, K, K2, K3, K_tensor, K_tensor_l2, K_tensor_l3, d_max, d_min, c2w
-    # print("called\n")
+    global last_frame, K_tensor_l1, K_tensor_l2, K_tensor_l3, d_max, d_min, c2w
+    print("called\n")
 
     with lock:
-        # print("executed\n")
         current_frame = None
 
         if last_frame is None:
-            # last_frame = MeasurementModule.PopFrame()
-            last_frame = debugRandomImage(80, 60)
+            last_frame = MeasurementModule.PopFrame()
 
-            # K = MeasurementModule.Device.K()
-            # K2 = MeasurementModule.Device.K2()
-            # K3 = MeasurementModule.Device.K3()
-            K3 = [[22.2976, 0.0000, 40.0000],
-                  [0.0000, 12.5424, 30.0000],
-                  [0.0000, 0.0000, 1.0000]]
+            # Assume World coordinates align with first frame camera coord system.
+            c2w = torch.tensor(np.eye(4), dtype=torch.float32).to(device)
+            K_tensor_l1 = torch.tensor(MeasurementModule.Device.K()).to(device)
+            K_tensor_l2 = torch.tensor(MeasurementModule.Device.K2()).to(device)
+            K_tensor_l3 = torch.tensor(MeasurementModule.Device.K3()).to(device)
 
-            # K_tensor = torch.tensor(K).to(device)
-            # K_tensor_l2 = torch.tensor(K2).to(device)
-            K_tensor_l3 = torch.tensor(K3).to(device)
-            #d_max = MeasurementModule.Device.maxDepth()
+            # d_max = MeasurementModule.Device.maxDepth()
             d_max = 10000
-            #d_min = MeasurementModule.Device.minDepth()
+            # d_min = MeasurementModule.Device.minDepth()
             d_min = 0
 
-            #  time.sleep(0.1)
+            MeasurementModule.Device.set_python_processing(False)
             return
 
-        # current_frame = MeasurementModule.PopFrame()
-        shift = 10
-        current_frame = np.zeros_like(last_frame)
-        current_frame[:, shift:] = last_frame[:, :-shift]
+        current_frame = MeasurementModule.PopFrame()
 
-
-        #T10 = icp(torch.tensor(current_frame.l3.depth_map, dtype=torch.float32).to(device),
-        #          torch.tensor(last_frame.l3.depth_map, dtype=torch.float32).to(device), torch.eye(4).to(device),
-        #          K_tensor_l3)
-
-        visualize_shift(last_frame, current_frame)
-
-        T10 = icp(torch.tensor(current_frame, dtype=torch.float32).to(device),
-                  torch.tensor(last_frame, dtype=torch.float32).to(device),
+        T10 = icp(torch.tensor(current_frame.l3.depth_map, dtype=torch.float32).to(device),
+                  torch.tensor(last_frame.l3.depth_map, dtype=torch.float32).to(device),
                   torch.eye(4).to(device),
                   K_tensor_l3)
-        print("Pose after l3:", T10)
 
-        #T10 = icp(current_frame.l2.depth_map, last_frame.l2.depth_map, T10, K_tensor_l2)
-        #print("Pose after l2:", T10)
+        T10 = icp(torch.tensor(current_frame.l2.depth_map, dtype=torch.float32).to(device),
+                  torch.tensor(last_frame.l2.depth_map, dtype=torch.float32).to(device),
+                  T10,
+                  K_tensor_l2)
 
-        #T10 = icp(current_frame.l1.depth_map, last_frame.l1.depth_map, T10, K_tensor)
-        #print("Pose after l1:", T10)
+        T10 = icp(torch.tensor(current_frame.l1.depth_map, dtype=torch.float32).to(device),
+                  torch.tensor(last_frame.l1.depth_map, dtype=torch.float32).to(device),
+                  T10,
+                  K_tensor_l1)
+
+
+        #visualize_shift(last_frame.raw_depth, current_frame.raw_depth, "raw")
+        #visualize_shift(last_frame.l1.depth_map, current_frame.l1.depth_map, "l1")
+        #visualize_shift(last_frame.l2.depth_map, current_frame.l2.depth_map, "l2")
+        #visualize_shift(last_frame.l3.depth_map, current_frame.l3.depth_map, "l3")
 
         c2w = c2w @ T10
         print("C2W!", c2w)
 
+        MeasurementModule.Device.set_python_processing(False)
+
 
 optimizer = LM_optimizer(max_iterations=5)
-icp = ICP(optimizer=optimizer, occlusion_threshold=1, symmetric_error=True)
+icp = ICP(optimizer=None, occlusion_threshold=1, symmetric_error=True)
 
 # Starts Program
-# MeasurementModule.Init(on_new_frame)
-on_new_frame()  # TODO remove
-on_new_frame()  # TODO remove
+MeasurementModule.Init(on_new_frame)
+# on_new_frame()  # TODO remove
+# on_new_frame()  # TODO remove
 
 # def load_K_Rt_from_P(P):
 #     """

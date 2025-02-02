@@ -16,10 +16,11 @@ public:
     static std::shared_ptr<ProcessedFrameQueue> Init(
         std::atomic<bool>& isRunning,
         std::function<void()> callback,
-        unsigned int queueSize = 10) {
+        unsigned int queueSize,
+        atomic<bool>& isPythonProcessing) {
 
         std::call_once(initFlag, [&]() {
-            instance = std::make_shared<ProcessedFrameQueue>(isRunning, callback, queueSize);
+            instance = std::make_shared<ProcessedFrameQueue>(isRunning, callback, queueSize, isPythonProcessing);
             });
 
         PySys_WriteStdout("QUEUE INITIALIZED\n");
@@ -37,8 +38,8 @@ public:
     }
 
     // Constructor TODO: SHould be private...
-    ProcessedFrameQueue(std::atomic<bool>& isRunning, std::function<void()> callback, unsigned int queueSize)
-        : isRunning(isRunning), callbackFunc(callback), queueSize(queueSize) {
+    ProcessedFrameQueue(std::atomic<bool>& isRunning, std::function<void()> callback, unsigned int queueSize, atomic<bool>& isPythonProcessing)
+        : isRunning(isRunning), callbackFunc(callback), queueSize(queueSize), isPythonProcessing(isPythonProcessing){
     }
 
     ~ProcessedFrameQueue() {}
@@ -49,16 +50,17 @@ public:
 
         while (queue.size() >= queueSize) {
             queue.pop();
-            PySys_WriteStdout("Popping Extra Frames\n");
         }
 
         queue.push(item);
 
         l.unlock();
 
-        py::gil_scoped_acquire acquire;
-
-        callbackFunc();  
+        if (!this->isPythonProcessing) {
+            py::gil_scoped_acquire acquire;
+            PySys_WriteStdout("Calling back\n");
+            callbackFunc();
+        }
     }
 
     ProcessedFrame Pop() {
@@ -69,6 +71,8 @@ public:
             PySys_WriteStdout("THIS IS REALLY TERRIBLE! no frames in queue\n");
             return ProcessedFrame(); // TODO ? Return default object if queue is empty
         }
+
+        isPythonProcessing = true;
             
         ProcessedFrame item = queue.front();
         queue.pop();
@@ -96,6 +100,7 @@ private:
     std::atomic<bool>& isRunning;
     std::function<void()> callbackFunc;
     unsigned int queueSize;
+    atomic<bool>& isPythonProcessing;
 };
 
 // Static instance pointer & once_flag

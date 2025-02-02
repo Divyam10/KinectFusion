@@ -25,6 +25,7 @@ class PyramidLevelL3:
 
 class ProcessedFrame:
     validity_mask: np.ndarray
+    raw_depth: np.ndarray
     l1: PyramidLevelL1
     l2: PyramidLevelL2
     l3: PyramidLevelL3
@@ -56,6 +57,16 @@ class Device:
     @staticmethod
     def minDepth() -> int:
         """ Returns the minimum depth value """
+        ...
+
+    @staticmethod
+    def set_cxx_running(is_running: bool) -> void:
+        """ Ends the C++ Code execution """
+        ...
+    
+    @staticmethod
+    def set_python_processing(is_running: bool) -> void:
+        """ Sets Python execution status for callback """
         ...
 
 

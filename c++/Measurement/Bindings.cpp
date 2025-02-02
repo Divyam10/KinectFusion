@@ -44,6 +44,7 @@ PYBIND11_MODULE(MeasurementModule, m) {
     py::class_<ProcessedFrame>(m, "ProcessedFrame")
         .def(py::init<>())
         .def_property_readonly("validity_mask", [](const ProcessedFrame& self) { return Array2Numpy(*self.validityMask, cst::height, cst::width); })
+        .def_property_readonly("raw_depth", [](const ProcessedFrame& self) { return Array2Numpy(*self.rawDepth, cst::height, cst::width); })
         .def_property_readonly("l1", [](const ProcessedFrame& self) { return py::cast(self.l1); })
         .def_property_readonly("l2", [](const ProcessedFrame& self) { return py::cast(self.l2); })
         .def_property_readonly("l3", [](const ProcessedFrame& self) { return py::cast(self.l3); });
@@ -66,5 +67,7 @@ PYBIND11_MODULE(MeasurementModule, m) {
         .def_static("K2", []() { return Array2Numpy(KinectFusion::getK2(), 3, 3); })
         .def_static("K3", []() { return Array2Numpy(KinectFusion::getK3(), 3, 3); })
         .def_static("maxDepth", &KinectFusion::getMaxDepth)
-        .def_static("minDepth", &KinectFusion::getMinDepth);
+        .def_static("minDepth", &KinectFusion::getMinDepth)
+        .def_static("set_cxx_running", &KinectFusion::SetCXXRunning)
+        .def_static("set_python_processing", &KinectFusion::SetPythonProcessing);
 }

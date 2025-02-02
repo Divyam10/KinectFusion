@@ -37,6 +37,9 @@ struct ProcessedFrame
 	//Used shared_ptr for pybind11...
 	shared_ptr<std::array<bool, cst::pixelCount>> validityMask; 
 
+	//Test
+	shared_ptr<std::array<uint16_t, cst::pixelCount>> rawDepth;
+
 	PyramidLevel<cst::pixelCount> l1;
 	PyramidLevel<cst::pixelCountL2> l2;
 	PyramidLevel<cst::pixelCountL3> l3;
