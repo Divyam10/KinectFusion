@@ -20,7 +20,7 @@ frame_acquisition_thread = None
 init_thread = None
 processing_thread = None
 optimizer = LM_optimizer(max_iterations=5)
-icp = ICP(optimizer=None, occlusion_threshold=1, symmetric_error=True)
+icp = ICP(optimizer=optimizer, occlusion_threshold=1, symmetric_error=True)
 
 
 def init_worker():
@@ -61,7 +61,6 @@ def process_frames():
         if last_frame is None:
             print("Initializing first frame...")
             last_frame = MeasurementModule.PopFrame()
-            print(last_frame.l1.depth_map)
 
             k_l_1 = MeasurementModule.Device.K()
             k_l_2 = MeasurementModule.Device.K2()

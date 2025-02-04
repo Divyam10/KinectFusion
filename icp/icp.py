@@ -3,7 +3,7 @@ import torch.nn.functional as F
 
 
 class ICP(torch.nn.Module):
-    def __init__(self, optimizer=None, occlusion_threshold=0.1, symmetric_error=False):
+    def __init__(self, optimizer=None, occlusion_threshold=0.1*1000, symmetric_error=False):
         super().__init__()
         self.optimizer = optimizer
         self.occlusion_threshold = occlusion_threshold
@@ -54,28 +54,28 @@ class ICP(torch.nn.Module):
             diff = vertices_transformed - vertices_target_warped
             residuals = (diff * normals).sum(dim=-1)
 
-            #mask_source = vertices_source[:, :, 2] <= 0
-            #mask_target = vertices_target_warped[:, :, 2] <= 0
+            mask_source = vertices_source[:, :, 2] <= 0
+            mask_target = vertices_target_warped[:, :, 2] <= 0
             out_of_view_pixels = (u_transformed <= 0) | (u_transformed >= W-1) | (v_transformed <= 0) | (v_transformed >= H-1)
             # TODO: Test effects of occlusion mask and estimate how many pixels it is masking on average
-            #occlusion_mask = diff.norm(p=2, dim=-1) > self.occlusion_threshold
-            #mask = mask_source | mask_target | out_of_view_pixels | occlusion_mask
-            #print(torch.sum(mask_source), torch.sum(mask_target), torch.sum(out_of_view_pixels), torch.sum(occlusion_mask))
-            #print(mask.shape, torch.sum(mask))
+            occlusion_mask = diff.norm(p=2, dim=-1) > self.occlusion_threshold
+            mask = mask_source | mask_target | out_of_view_pixels | occlusion_mask
+            # print(torch.sum(mask_source), torch.sum(mask_target), torch.sum(out_of_view_pixels), torch.sum(occlusion_mask))
+            # print(mask.shape, torch.sum(mask))
             # Perform linear least squares if no optimizer provided
             if self.optimizer is None:
                 vertices_transformed = vertices_transformed.view(-1, 3)
                 normals = normals.view(-1, 3)
                 residuals = residuals.view(-1, 1)
-                #mask = mask.view(-1)
+                mask = mask.view(-1)
 
                 A = torch.matmul(ICP.generate_3d_skew_symmetric_matrix(vertices_transformed.view(-1, 3)), normals.view(-1, 3).unsqueeze(-1)).squeeze(-1)
                 A = torch.cat((A, normals), dim=-1)
 
                 b = -residuals
 
-                #A[mask] = 0.
-                #b[mask] = 0.
+                A[mask] = 0.
+                b[mask] = 0.
 
                 # Linear solver for A @ xi = b
                 if A.device.type == 'mps':
@@ -88,12 +88,12 @@ class ICP(torch.nn.Module):
                 pose = self.construct_pose_from_parameters(optimized_parameters)
                 return pose
             Jf = self.compute_jacobian(vertices_transformed, normals)
-            #residuals[mask] = 0.
+            residuals[mask] = 0.
             residuals = residuals.view(H*W, 1, 1)
 
             # print("loss:", torch.linalg.norm(residuals))
 
-            #Jf[mask] = 0.
+            Jf[mask] = 0.
             Jf = Jf.view(H*W, 1, -1)
             print("NEXT CALL DOESNT WORK")
             delta_parameters = self.optimizer(residuals, Jf)
