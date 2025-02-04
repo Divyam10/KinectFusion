@@ -225,9 +225,6 @@ public:
 			this->K3[i] = K3(i / 3, i % 3);
 		}
 
-		//TODO REMOVE??!
-		//this->processingThread = thread(&KinectFusion::ProcessFrames, this);
-
 		if (this->videoColorStream->start() != STATUS_OK)
 			throw runtime_error("Failed to start color stream.");
 
@@ -301,8 +298,6 @@ public:
 			{
 				this->frameTupleQueue->pop();
 			}
-			//TODO ok. hear me out. if this is commented out i cant see any output on the python side?
-			////PySys_WriteStdout(".\n");
 
 			//Notify the processing Thread(s)
 			frame_cv.notify_all();
@@ -314,6 +309,7 @@ public:
 	{
 		unique_ptr<FrameTuple> currentFrame;
 		{
+			//TODO remove this
 			py::gil_scoped_acquire acquire;
 			PySys_WriteStdout("ProcessFrames init\n");
 		}
@@ -356,16 +352,15 @@ public:
 	*/
 	void ProcessFrame(unique_ptr<FrameTuple> frame)
 	{
-		////PySys_WriteStdout("Processing Frame\n");		
-
 		//Copy original data
 		shared_ptr<array<uint16_t, cst::pixelCount>> depthImage = make_shared<array<uint16_t, cst::pixelCount>>();
 		memcpy(depthImage->data(), frame->depthFrame->getData(), cst::pixelCount * sizeof(uint16_t));
 
+		shared_ptr<array<uint8_t, cst::pixelCountXYZ>> colorImage = make_shared<array<uint8_t, cst::pixelCountXYZ>>();
+		memcpy(colorImage->data(), frame->colorFrame->getData(), cst::pixelCountXYZ * sizeof(uint8_t));
+
 		shared_ptr<array<uint16_t, cst::pixelCount>> depthImageFiltered = make_shared<array<uint16_t, cst::pixelCount>>();
-
 		shared_ptr<array<uint16_t, cst::pixelCountXYZ>> vertexMap = make_shared<array<uint16_t, cst::pixelCountXYZ>>();
-
 		shared_ptr<array<bool, cst::pixelCount>> vertexValidityMask = make_shared<array<bool, cst::pixelCount>>();
 
 		//Init all vertices as valid
@@ -482,6 +477,7 @@ public:
 			{
 				move(vertexValidityMask),
 				move(depthImage),
+				move(colorImage),
 				PyramidLevel<cst::pixelCount>
 				{
 					move(depthImageFiltered),

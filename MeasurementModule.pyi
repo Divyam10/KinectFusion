@@ -26,6 +26,7 @@ class PyramidLevelL3:
 class ProcessedFrame:
     validity_mask: np.ndarray
     raw_depth: np.ndarray
+    color_map: np.ndarray
     l1: PyramidLevelL1
     l2: PyramidLevelL2
     l3: PyramidLevelL3

@@ -6,6 +6,8 @@
 #include "Structs.h"
 #include "ProcessedFrameQueue.h"
 #include "Measurement.h"
+#include <vector>  
+#include <cstddef>  
 
 namespace py = pybind11;
 
@@ -20,6 +22,19 @@ py::array_t<T> Array2Numpy(const std::array<T, N>& map, size_t height, size_t wi
         map.data()  // Data
     );
 }
+
+template <typename T, size_t N>
+py::array_t<T> Array2NumpyColor(const std::array<T, N>& map, size_t height, size_t width) {
+    // Define shape and strides
+    std::vector<size_t> shape = { height, width, 3 }; // (height, width, 3 color channels)
+    std::vector<size_t> strides = { width * 3 * sizeof(T), 3 * sizeof(T), sizeof(T) }; // Strides for 3 channels (RGB)
+
+    // Create the numpy array with the given shape, strides, and data pointer
+    py::array_t<T> arr(shape, strides, map.data());
+
+    return arr;
+}
+
 
 
 PYBIND11_MODULE(MeasurementModule, m) {
@@ -45,6 +60,7 @@ PYBIND11_MODULE(MeasurementModule, m) {
         .def(py::init<>())
         .def_property_readonly("validity_mask", [](const ProcessedFrame& self) { return Array2Numpy(*self.validityMask, cst::height, cst::width); })
         .def_property_readonly("raw_depth", [](const ProcessedFrame& self) { return Array2Numpy(*self.rawDepth, cst::height, cst::width); })
+        .def_property_readonly("color_map", [](const ProcessedFrame& self) { return Array2NumpyColor(*self.colorMap, cst::height, cst::widthXYZ); })
         .def_property_readonly("l1", [](const ProcessedFrame& self) { return py::cast(self.l1); })
         .def_property_readonly("l2", [](const ProcessedFrame& self) { return py::cast(self.l2); })
         .def_property_readonly("l3", [](const ProcessedFrame& self) { return py::cast(self.l3); });

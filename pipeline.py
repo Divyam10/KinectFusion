@@ -51,7 +51,7 @@ def process_frames():
     k_l_1 = None
     k_l_2 = None
     k_l_3 = None
-    c2w = torch.tensor(np.eye(4), dtype=torch.float32).to(device)
+    c2w = np.eye(4)
     vox_grid = None
 
     print("Processing frames...")
@@ -61,10 +61,11 @@ def process_frames():
         if last_frame is None:
             print("Initializing first frame...")
             last_frame = MeasurementModule.PopFrame()
+            print(last_frame.l1.depth_map)
 
-            k_l_1 = torch.tensor(MeasurementModule.Device.K()).to(device)
-            k_l_2 = torch.tensor(MeasurementModule.Device.K2()).to(device)
-            k_l_3 = torch.tensor(MeasurementModule.Device.K3()).to(device)
+            k_l_1 = MeasurementModule.Device.K()
+            k_l_2 = MeasurementModule.Device.K2()
+            k_l_3 = MeasurementModule.Device.K3()
 
             print("Computing volume bounds...")
             volume_bounds = get_vol_bnds(last_frame.l1.depth_map, k_l_1, c2w)
@@ -74,8 +75,13 @@ def process_frames():
             continue
 
         # On new frame:
-        # TODO change this
         current_frame = MeasurementModule.PopFrame()
+
+        if current_frame is None:
+            print("Waiting for Frame...")
+            time.sleep(0.03)
+            continue
+
         depth_frame = current_frame.l1.depth_map
 
         print("Preprocessing frame...")
@@ -99,7 +105,7 @@ def process_frames():
         print("ICP... Done!")
 
         print("Integrate new depth and color into model")
-        vox_grid.integrate(depth_frame, c2w, current_frame.l1.color_map)
+        vox_grid.integrate(depth_frame, c2w, current_frame.color_map)
         print("Integration... Done!")
 
         print("Performing Marching Cubes...")
@@ -111,32 +117,33 @@ def process_frames():
 def calc_icp(
         current_frame: MeasurementModule.ProcessedFrame,
         tsdf_depth_pyramid: list,
-        k_l_1: torch.Tensor,
-        k_l_2: torch.Tensor,
-        k_l_3: torch.Tensor,
-        c2w: torch.Tensor
+        k_l_1: np.ndarray,
+        k_l_2: np.ndarray,
+        k_l_3: np.ndarray,
+        c2w: np.ndarray
 ):
     t10 = icp(torch.tensor(current_frame.l3.depth_map, dtype=torch.float32).to(device),
               torch.tensor(tsdf_depth_pyramid[2], dtype=torch.float32).to(device),
-              np.identity(4),
-              k_l_3)
+              torch.tensor(np.identity(4), dtype=torch.float32).to(device),
+              torch.tensor(k_l_3, dtype=torch.float32).to(device))
 
     t10 = icp(torch.tensor(current_frame.l2.depth_map, dtype=torch.float32).to(device),
               torch.tensor(tsdf_depth_pyramid[1], dtype=torch.float32).to(device),
               t10,
-              k_l_2)
+              torch.tensor(k_l_2, dtype=torch.float32).to(device))
 
     t10 = icp(torch.tensor(current_frame.l1.depth_map, dtype=torch.float32).to(device),
               torch.tensor(tsdf_depth_pyramid[0], dtype=torch.float32).to(device),
               t10,
-              k_l_1)
+              torch.tensor(k_l_1, dtype=torch.float32).to(device))
 
     # TODO range/instead check for Null?
-    if torch.allclose(t10, torch.eye(4).to(device), atol=1e-3):
+    '''if torch.allclose(t10, torch.eye(4).to(device), atol=1e-3):
         print("ICP failed or did not improve pose")
     else:
-        c2w = c2w @ t10
+        c2w = c2w @ t10'''
 
+    c2w = c2w @ t10
     return c2w
 
 

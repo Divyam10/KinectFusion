@@ -31,7 +31,6 @@ def get_view_frustum(depth_im, cam_intr, cam_pose):
 
 
 def get_vol_bnds(depth_im, cam_intr, cam_pose):
-
     vol_bnds = np.zeros((3, 2))
 
     view_frust_pts = get_view_frustum(depth_im, cam_intr, cam_pose)
@@ -127,12 +126,12 @@ class TSDF():
         self._vol_origin = torch.from_numpy(self._vol_origin).cuda()
         self._voxel_size = torch.asarray(self._voxel_size).cuda()
 
-    def integrate(self, depth_image, camera_pose, color_img, sdf_trunc=0.03):
+    def integrate(self, depth_image, camera_pose: torch.Tensor, color_img, sdf_trunc=0.03):
 
         with torch.no_grad():
 
             world2cam = torch.inverse(
-                torch.from_numpy(camera_pose)).float().cuda()
+                camera_pose).float().cuda()
             pts_camera = torch.matmul(
                 world2cam, torch.t(self.vox_Wcoords))
             z_points = pts_camera[2]
@@ -142,8 +141,8 @@ class TSDF():
             y_pix = torch.round(
                 (pts_camera[1] * self.fy)/z_points + self.cy).int()
 
-            valid_pix = (x_pix >= 0) & (x_pix < 640) & (
-                y_pix >= 0) & (y_pix < 480) & (z_points > 0)
+            valid_pix = (x_pix >= 0) & (x_pix < 320) & (
+                y_pix >= 0) & (y_pix < 240) & (z_points > 0)
             x_coords_valid = self.vox_coords[valid_pix, 0]
             y_coords_valid = self.vox_coords[valid_pix, 1]
             z_coords_valid = self.vox_coords[valid_pix, 2]
@@ -289,7 +288,7 @@ class TSDF():
         return valid_pts_mask
 
     @torch.no_grad()
-    def render_model(self, c2w, intri, imh, imw, near=0.5, far=5., n_samples=192):
+    def render_model(self, c2w, intri, imh, imw, near=500., far=5000., n_samples=192):
 
         c2w = torch.from_numpy(c2w).float()
         c2w = c2w.to(self.device)
@@ -369,7 +368,7 @@ class TSDF():
 
         return depth_rend, color_rend, vertex_rend, normal_rend, hit_surface_mask
 
-    def render_pyramid(self, c2w, intri, imh, imw, n_pyr=4, near=0.5, far=5., n_samples=192):
+    def render_pyramid(self, c2w, intri, imh, imw, n_pyr=4, near=500., far=5000., n_samples=192):
         K = intri.clone()
         dep_pyr, rgb_pyr, vtx_pyr, nrm_pyr, mask_pyr = [], [], [], [], []
         for l in range(n_pyr):
@@ -431,7 +430,7 @@ class TSDF():
 
         vox_grid.integrate(depth_im, cam_pose, img)
 
-        depth_rend, color_rend, vertex_rend, normal_rend, hit_surface_mask = vox_grid.render_model(cam_pose, cam_intr, 640, 480)
+        depth_rend, color_rend, vertex_rend, normal_rend, hit_surface_mask = vox_grid.render_model(cam_pose, cam_intr, 320, 240)
 
 
 '''
