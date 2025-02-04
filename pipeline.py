@@ -16,7 +16,7 @@ else:
 processing_running = True
 optimizer = LM_optimizer(max_iterations=5)
 icp = ICP(optimizer=None, occlusion_threshold=1, symmetric_error=True)
-
+user_input = None
 
 def init_worker():
     MeasurementModule.Init()
@@ -102,12 +102,18 @@ processing_thread = threading.Thread(target=processing_worker)
 
 # Main Program
 init_worker()
-time.sleep(2)
-print("yolo")
 frame_acquisition_thread.start()
 processing_thread.start()
-time.sleep(100)
-print("bolo")
-#
 
+while user_input is None:
+    user_input = input("Press Something to exit: ")
+    time.sleep(1)
 
+processing_running = False
+
+MeasurementModule.Device.set_cxx_running(False)
+
+frame_acquisition_thread.join()
+processing_thread.join()
+
+print("All threads stopped. Exiting.")
