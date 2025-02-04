@@ -49,18 +49,27 @@ PYBIND11_MODULE(MeasurementModule, m) {
         .def_property_readonly("l2", [](const ProcessedFrame& self) { return py::cast(self.l2); })
         .def_property_readonly("l3", [](const ProcessedFrame& self) { return py::cast(self.l3); });
 
-
     m.def("PopFrame", &PopFromQueue),
         R"pbdoc(
             Pops a new processed frame from the queue.
     )pbdoc";
 
-
-    m.def("Init", &CxxMain, py::arg("pythonCallback"),
+    m.def("Init", &CxxMain,
     R"pbdoc(
             Starts the C++ program with a Python callback function.
-            The callback is executed from within the C++ program when a new frame gets pushed to the framequeue.
+            The callback is executed from within the C++ program when 2 frames are available in the framequeue.
     )pbdoc");
+
+    m.def("FrameCallback", &TrySetFrameCallback, py::arg("pythonCallback"),
+    R"pbdoc(
+            This callback is executed once, from within the C++ program, when 2 frames are available in the framequeue.
+    )pbdoc");
+
+    m.def("StartProcessingThread", &StartProcessingThread,
+        R"pbdoc(
+            Starts StartProcessingThread
+    )pbdoc");
+
 
     py::class_<KinectFusion>(m, "Device")
         .def_static("K", []() { return Array2Numpy(KinectFusion::getK(), 3, 3); })
@@ -68,6 +77,5 @@ PYBIND11_MODULE(MeasurementModule, m) {
         .def_static("K3", []() { return Array2Numpy(KinectFusion::getK3(), 3, 3); })
         .def_static("maxDepth", &KinectFusion::getMaxDepth)
         .def_static("minDepth", &KinectFusion::getMinDepth)
-        .def_static("set_cxx_running", &KinectFusion::SetCXXRunning)
-        .def_static("set_python_processing", &KinectFusion::SetPythonProcessing);
+        .def_static("set_cxx_running", &KinectFusion::SetCXXRunning);
 }

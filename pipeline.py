@@ -1,10 +1,10 @@
-import threading
 import numpy as np
 import torch
 import MeasurementModule
 import time
 from icp.levenberg_marquardt import LM_optimizer
 from icp.icp import ICP
+import threading
 
 if torch.cuda.is_available():
     device = torch.device("cuda")
@@ -13,19 +13,33 @@ elif torch.backends.mps.is_available():
 else:
     device = torch.device("cpu")
 
-# Event flags for synchronization
-processing_running = threading.Event()
-frame_available = threading.Event()
+processing_running = True
+optimizer = LM_optimizer(max_iterations=5)
+icp = ICP(optimizer=None, occlusion_threshold=1, symmetric_error=True)
 
-def on_new_frame():
-    global frame_available
-    # Signal C++ to not call frame callbacks while Python processes
-    MeasurementModule.Device.set_python_processing(True)
-    print("New frame available.")
-    frame_available.set()  # Notify processing thread to start
+
+def init_worker():
+    MeasurementModule.Init()
+
+
+def processing_worker():
+    MeasurementModule.StartProcessingThread()
+
+
+def frame_acquisition_worker() :
+    while not MeasurementModule.FrameCallback(pythonCallback):
+        print("trying\n")
+        time.sleep(1)
+    print("Queue Initialized!\n")
+
+
+# TODO rename this func
+def pythonCallback():
+    print("2 frames available.")
+    process_frames()
+
 
 def process_frames():
-    global frame_available
     current_frame = None
     last_frame = None
     d_max = 10000  # define allowed range of depth values in mm
@@ -37,12 +51,7 @@ def process_frames():
 
     print("Processing frames...")
 
-    while processing_running.is_set():
-        print("Waiting for frames...")
-        # Wait for a frame to be available (this blocks until the event is set)
-        frame_available.wait()
-        print("Got frame...")
-
+    while processing_running:
         # Init Logic for the first frame
         if last_frame is None:
             print("Initializing first frame...")
@@ -51,10 +60,6 @@ def process_frames():
             K_tensor_l1 = torch.tensor(MeasurementModule.Device.K()).to(device)
             K_tensor_l2 = torch.tensor(MeasurementModule.Device.K2()).to(device)
             K_tensor_l3 = torch.tensor(MeasurementModule.Device.K3()).to(device)
-            # Skip to next iteration after initialization is done
-            frame_available.clear()  # Clear event, wait for next frame
-            # Signal C++ that it can/should call callbacks
-            MeasurementModule.Device.set_python_processing(False)
             continue
 
         # Process subsequent frames
@@ -80,7 +85,7 @@ def process_frames():
                   K_tensor_l1)
 
         c2w = c2w @ T10
-        #print("C2W!", c2w)
+        # print("C2W!", c2w)
         print("ICP...Done!")
 
         # Record end time and write duration to a file
@@ -90,28 +95,19 @@ def process_frames():
         with open("C:/Users/steph/Documents/Projekte/KinectFusion/processing_time.txt", "a") as f:
             f.write(f"{elapsed_time}\n")
 
-        frame_available.clear()  # Wait for next frame
 
-        # Signal C++ that it can/should call callbacks
-        MeasurementModule.Device.set_python_processing(False)
-        # time.sleep(0.01)
+frame_acquisition_thread = threading.Thread(target=frame_acquisition_worker)
+init_thread = threading.Thread(target=init_worker)
+processing_thread = threading.Thread(target=processing_worker)
 
-def start_cpp_init():
-    # This method will start the C++ initialization in a background thread
-    MeasurementModule.Init(on_new_frame)
-
-# Initialize ICP optimizer
-optimizer = LM_optimizer(max_iterations=5)
-icp = ICP(optimizer=None, occlusion_threshold=1, symmetric_error=True)
-
-# Start processing thread
-processing_running.set()  # Signal to start processing
-processing_thread = threading.Thread(target=process_frames, daemon=True)
+# Main Program
+init_worker()
+time.sleep(2)
+print("yolo")
+frame_acquisition_thread.start()
 processing_thread.start()
+time.sleep(100)
+print("bolo")
+#
 
-# Start the C++ initialization in a worker thread
-cpp_init_thread = threading.Thread(target=start_cpp_init, daemon=True)
-cpp_init_thread.start()
 
-# Keep the main thread alive while other threads do their work
-cpp_init_thread.join()  # Wait for C++ initialization to complete (optional)

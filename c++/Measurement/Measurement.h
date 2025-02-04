@@ -9,23 +9,22 @@ using namespace std;
 
 static void InitKinectFusion(shared_ptr<KinectFusion> kinectFusion, promise<void>& initPromise);
 static void HandleKeyPresses(atomic<bool>& isRunning);
-
+shared_ptr<KinectFusion> kinectFusion;
+thread kinectFusionThread;
+thread processingThread;
 
 /*
 * Called by Python with "OnFrame" Callback
 */
-static int CxxMain(function<void()> pythonCallback) {
+static int CxxMain() {
 	atomic<bool> isRunning = true;
-	atomic<bool> isPythonProcessing = false;
-	thread kinectFusionThread;
-	shared_ptr<KinectFusion> kinectFusion;
 	promise<void> initPromise;
 	future<void> initFuture = initPromise.get_future();
 
 	try
 	{
 		//Construct in main thread
-		kinectFusion = make_shared<KinectFusion>(isRunning, pythonCallback, isPythonProcessing);
+		kinectFusion = make_shared<KinectFusion>(isRunning);
 
 		//Init on worker thread
 		kinectFusionThread = thread(InitKinectFusion, kinectFusion, ref(initPromise));
@@ -33,10 +32,10 @@ static int CxxMain(function<void()> pythonCallback) {
 		//Check for Exceptions
 		initFuture.get();
 
-		HandleKeyPresses(isRunning);
+		//HandleKeyPresses(isRunning);
 
-		if (kinectFusionThread.joinable())
-			kinectFusionThread.join();
+		//if (kinectFusionThread.joinable())
+			//kinectFusionThread.join();
 	}
 	catch (const std::exception& ex)
 	{
@@ -51,6 +50,16 @@ static int CxxMain(function<void()> pythonCallback) {
 
 	return 0;
 }
+
+static void StartProcessing() {
+	kinectFusion->ProcessFrames();
+}
+
+static void StartProcessingThread() {
+	processingThread = thread(StartProcessing);
+}
+
+
 
 /*
 * KinectFusion logic initialized by worker thread
