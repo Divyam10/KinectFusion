@@ -24,25 +24,11 @@ struct FrameTuple
 	unique_ptr<VideoFrameRef> depthFrame;
 };
 
-//Used shared_ptr for pybind11...
-template <size_t pixelCount>
-struct PyramidLevel {
-	shared_ptr<std::array<uint16_t, pixelCount>> depthMap;
-	shared_ptr<std::array<uint16_t, pixelCount * 3>> vertexMap;
-	shared_ptr<std::array<uint16_t, pixelCount * 3>> normalMap;
-};
-
 struct ProcessedFrame
 {
-	//Used shared_ptr for pybind11...
-	shared_ptr<std::array<bool, cst::pixelCount>> validityMask; 
-
-	//Test
-	shared_ptr<std::array<uint16_t, cst::pixelCount>> rawDepth;
-
 	shared_ptr<std::array<uint8_t, cst::pixelCountXYZ>> colorMap;
-
-	PyramidLevel<cst::pixelCount> l1;
-	PyramidLevel<cst::pixelCountL2> l2;
-	PyramidLevel<cst::pixelCountL3> l3;
+	shared_ptr<std::array<uint16_t, cst::pixelCount>> rawDepth;
+	shared_ptr<std::array<uint16_t, cst::pixelCount>> depthMap_l1;
+	shared_ptr<std::array<uint16_t, cst::pixelCountL2>> depthMap_l2;
+	shared_ptr<std::array<uint16_t, cst::pixelCountL3>> depthMap_l3;
 };

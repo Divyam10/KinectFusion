@@ -71,26 +71,19 @@ public:
 	shared_ptr<queue<unique_ptr<VideoFrameRef>>> colorFrameQueue;
 	shared_ptr<queue<unique_ptr<VideoFrameRef>>> depthFrameQueue;
 	unique_ptr<queue<unique_ptr<FrameTuple>>> frameTupleQueue;
-
-	shared_ptr<ProcessedFrameQueue> processedFramesQueue; // Shared -> NEEDS to be copyable for python / pybind
-
-	VideoMode depthVideoMode; // TODO should be treated the same as constants...
-	PixelFormat pixelFormatColor; // TODO should be treated the same as constants...
-	PixelFormat pixelFormatDepth; // TODO should be treated the same as constants...
-	unsigned int maxDepth = 0; // TODO should be treated the same as constants...
-	unsigned int minDepth = 0; // TODO should be treated the same as constants...
+	shared_ptr<ProcessedFrameQueue> processedFramesQueue; //Passed to Python Shared -> NEEDS to be copyable for python / pybind
+	mutex frame_queue_mtx;
+	condition_variable frame_cv;
+	VideoMode depthVideoMode; 
+	VideoMode colorVideoMode;
 	array<float, 9> K; //Passed to Python
 	array<float, 9> K2; //Passed to Python
 	array<float, 9> K3; //Passed to Python
 	array<float, 9> K_inv;
 	const unsigned int queueSizeLimit = 30; //Adjustable!
-	mutex frame_queue_mtx;
-	thread gatheringThread;
-	thread processingThread;
-	condition_variable frame_cv;
-	atomic<bool>& isRunning;
 	const unsigned int sigmaSpatial = 10;  //Adjustable!
 	const int sigmaRange = 100;  //Adjustable!
+	atomic<bool>& isRunning;
 
 	KinectFusion(atomic<bool>& isRunning)
 		: colorFrameQueue(make_shared<queue<unique_ptr<VideoFrameRef>>>()),
@@ -114,10 +107,6 @@ public:
 	~KinectFusion() 
 	{
 		isRunning = false;
-
-		// Join threads before destruction
-		if (this->processingThread.joinable())
-			this->processingThread.join(); 
 
 		if (videoColorStream) 
 			videoColorStream->destroy();
@@ -188,10 +177,19 @@ public:
 		if(this->videoDepthStream->addNewFrameListener(depthFrameListener.get()) != STATUS_OK)
 			throw runtime_error("Failed to add depth frame listener.");
 
-		//TODO camera exposure??
 		this->depthVideoMode = videoDepthStream->getVideoMode();
-		this->maxDepth = videoDepthStream->getMaxPixelValue();
-		this->minDepth = videoDepthStream->getMinPixelValue();
+		this->depthVideoMode.setResolution(cst::width, cst::height);
+
+		if (videoDepthStream->setVideoMode(this->depthVideoMode) != openni::STATUS_OK) {
+			std::cerr << "Failed to set depth video mode: " << openni::OpenNI::getExtendedError() << std::endl;
+		}
+
+		this->colorVideoMode = videoColorStream->getVideoMode();
+		this->colorVideoMode.setResolution(cst::width, cst::height);
+
+		if (videoColorStream->setVideoMode(this->colorVideoMode) != openni::STATUS_OK) {
+			std::cerr << "Failed to set color video mode: " << openni::OpenNI::getExtendedError() << std::endl;
+		}
 
 		const float focalX = float(depthVideoMode.getResolutionX()) / 2.f * tanf(videoDepthStream->getHorizontalFieldOfView() / 2.f);
 		const float focalY = float(depthVideoMode.getResolutionY()) / 2.f * tanf(videoDepthStream->getVerticalFieldOfView() / 2.f);
@@ -344,7 +342,6 @@ public:
 
 
 	/*
-	*   320 � 240 resolution, 76800 pixels in both color & depth
 	*   RGB888 = 3 bytes (rgb) per pixel
 	*   Each index is R->G->B->R...
 	*   PIXEL_FORMAT_DEPTH_1_MM(?) -> Resolution of Data in mm
@@ -360,7 +357,7 @@ public:
 		memcpy(colorImage->data(), frame->colorFrame->getData(), cst::pixelCountXYZ * sizeof(uint8_t));
 
 		shared_ptr<array<uint16_t, cst::pixelCount>> depthImageFiltered = make_shared<array<uint16_t, cst::pixelCount>>();
-		shared_ptr<array<uint16_t, cst::pixelCountXYZ>> vertexMap = make_shared<array<uint16_t, cst::pixelCountXYZ>>();
+
 		shared_ptr<array<bool, cst::pixelCount>> vertexValidityMask = make_shared<array<bool, cst::pixelCount>>();
 
 		//Init all vertices as valid
@@ -374,32 +371,16 @@ public:
 			cst::pixelCount,
 			cst::width,
 			cst::height,
-			this->minDepth,
-			this->maxDepth,
+			cst::minDepth,
+			cst::maxDepth,
 			this->sigmaSpatial,
 			this->sigmaRange);
-
-		LaunchBackProjectionKernel(
-			this->K_inv.data(),
-			depthImageFiltered->data(),
-			vertexMap->data(),
-			cst::pixelCount,
-			cst::width,
-			cst::height,
-			cst::stride);
 
 		//TODO move this inside functions probably
 		const unsigned int blockSize = 2;
 
 		shared_ptr<array<uint16_t, cst::pixelCountL2>> depthImageFilteredL2 = make_shared<array<uint16_t, cst::pixelCountL2>>();
 		shared_ptr<array<uint16_t, cst::pixelCountL3>> depthImageFilteredL3 = make_shared<array<uint16_t, cst::pixelCountL3>>();
-
-		shared_ptr<array<uint16_t, cst::pixelCountXYZL2>> vertexMapL2 = make_shared<array<uint16_t, cst::pixelCountXYZL2>>();
-		shared_ptr<array<uint16_t, cst::pixelCountXYZL3>> vertexMapL3 = make_shared<array<uint16_t, cst::pixelCountXYZL3>>();
-
-		shared_ptr<array<uint16_t, cst::pixelCountXYZ>> normalMap = make_shared<array<uint16_t, cst::pixelCountXYZ>>();
-		shared_ptr<array<uint16_t, cst::pixelCountXYZL2>> normalMapL2 = make_shared<array<uint16_t, cst::pixelCountXYZL2>>();
-		shared_ptr<array<uint16_t, cst::pixelCountXYZL3>> normalMapL3 = make_shared<array<uint16_t, cst::pixelCountXYZL3>>();
 
 		//Blockaveraging and Subsampling to half resolution --> 2x2 blocks
 		LaunchBlockAveragingAndSubsampleKernel(
@@ -422,80 +403,14 @@ public:
 			blockSize,
 			this->sigmaRange);
 
-		LaunchBackProjectionKernel(
-			this->K_inv.data(),
-			depthImageFilteredL2->data(),
-			vertexMapL2->data(),
-			cst::pixelCountL2,
-			cst::widthL2,
-			cst::heightL2,
-			cst::stride);
-
-		LaunchBackProjectionKernel(
-			this->K_inv.data(),
-			depthImageFilteredL3->data(),
-			vertexMapL3->data(),
-			cst::pixelCountL3,
-			cst::widthL3,
-			cst::heightL3,
-			cst::stride);
-
-		LaunchNormalMapKernel(
-			vertexMap->data(),
-			normalMap->data(),
-			cst::pixelCount,
-			cst::width,
-			cst::height,
-			cst::stride
-		);
-
-		LaunchNormalMapKernel(
-			vertexMapL2->data(),
-			normalMapL2->data(),
-			cst::pixelCountL2,
-			cst::widthL2,
-			cst::heightL2,
-			cst::stride
-		);
-
-		LaunchNormalMapKernel(
-			vertexMapL3->data(),
-			normalMapL3->data(),
-			cst::pixelCountL3,
-			cst::widthL3,
-			cst::heightL3,
-			cst::stride
-		);
-
-		{
-			py::gil_scoped_acquire acquire;
-			PySys_WriteStdout("Process 1 frame before push\n");
-		}
-
 		processedFramesQueue->Push(
 			ProcessedFrame
 			{
-				move(vertexValidityMask),
-				move(depthImage),
 				move(colorImage),
-				PyramidLevel<cst::pixelCount>
-				{
-					move(depthImageFiltered),
-					move(vertexMap),
-					move(normalMap)
-				},
-				PyramidLevel<cst::pixelCountL2>
-				{
-					move(depthImageFilteredL2),
-					move(vertexMapL2),
-					move(normalMapL2)
-				},
-				PyramidLevel<cst::pixelCountL3>
-				{
-					move(depthImageFilteredL3),
-					move(vertexMapL3),
-					move(normalMapL3)
-				}
+				move(depthImage),
+				move(depthImageFiltered),
+				move(depthImageFilteredL2),
+				move(depthImageFilteredL3),
 			}
 		);
 	}
@@ -511,14 +426,6 @@ public:
 
 	static array<float, 9> getK3() {
 		return instance->K3;
-	}
-
-	static int getMinDepth() {
-		return int(instance->minDepth);
-	}
-
-	static int getMaxDepth() {
-		return int(instance->maxDepth);
 	}
 
 	static void SetCXXRunning(bool isRunning) {

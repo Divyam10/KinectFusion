@@ -79,10 +79,7 @@ public:
             l.unlock();
 
             py::gil_scoped_acquire acquire;
-
-            PySys_WriteStdout("Callback le epic try.\n");
             this->callbackFunc();
-            PySys_WriteStdout("Callback executed successfully.\n");
         }
     }
 

@@ -35,35 +35,14 @@ py::array_t<T> Array2NumpyColor(const std::array<T, N>& map, size_t height, size
     return arr;
 }
 
-
-
 PYBIND11_MODULE(MeasurementModule, m) {
-    py::class_<PyramidLevel<cst::pixelCount>>(m, "PyramidLevelL1")
-        .def(py::init<>())
-        .def_property_readonly("depth_map", [](const PyramidLevel<cst::pixelCount>& self) { return Array2Numpy(*self.depthMap, cst::height, cst::width); })
-        .def_property_readonly("vertex_map", [](const PyramidLevel<cst::pixelCountXYZ>& self) { return Array2Numpy(*self.vertexMap, cst::height, cst::widthXYZ); })
-        .def_property_readonly("normal_map", [](const PyramidLevel<cst::pixelCountXYZ>& self) { return Array2Numpy(*self.normalMap, cst::height, cst::widthXYZ); });
-
-    py::class_<PyramidLevel<cst::pixelCountL2>>(m, "PyramidLevelL2")
-        .def(py::init<>())
-        .def_property_readonly("depth_map", [](const PyramidLevel<cst::pixelCountL2>& self) { return Array2Numpy(*self.depthMap, cst::heightL2, cst::widthL2); })
-        .def_property_readonly("vertex_map", [](const PyramidLevel<cst::pixelCountXYZL2>& self) { return Array2Numpy(*self.vertexMap, cst::heightL2, cst::widthL2XYZ); })
-        .def_property_readonly("normal_map", [](const PyramidLevel<cst::pixelCountXYZL2>& self) { return Array2Numpy(*self.normalMap, cst::heightL2, cst::widthL2XYZ); });
-
-    py::class_<PyramidLevel<cst::pixelCountL3>>(m, "PyramidLevelL3")
-        .def(py::init<>())
-        .def_property_readonly("depth_map", [](const PyramidLevel<cst::pixelCountL3>& self) { return Array2Numpy(*self.depthMap, cst::heightL3, cst::widthL3); })
-        .def_property_readonly("vertex_map", [](const PyramidLevel<cst::pixelCountXYZL3>& self) { return Array2Numpy(*self.vertexMap, cst::heightL3, cst::widthL3XYZ); })
-        .def_property_readonly("normal_map", [](const PyramidLevel<cst::pixelCountXYZL3>& self) { return Array2Numpy(*self.normalMap, cst::heightL3, cst::widthL3XYZ); });
-
     py::class_<ProcessedFrame>(m, "ProcessedFrame")
         .def(py::init<>())
-        .def_property_readonly("validity_mask", [](const ProcessedFrame& self) { return Array2Numpy(*self.validityMask, cst::height, cst::width); })
         .def_property_readonly("raw_depth", [](const ProcessedFrame& self) { return Array2Numpy(*self.rawDepth, cst::height, cst::width); })
         .def_property_readonly("color_map", [](const ProcessedFrame& self) { return Array2NumpyColor(*self.colorMap, cst::height, cst::widthXYZ); })
-        .def_property_readonly("l1", [](const ProcessedFrame& self) { return py::cast(self.l1); })
-        .def_property_readonly("l2", [](const ProcessedFrame& self) { return py::cast(self.l2); })
-        .def_property_readonly("l3", [](const ProcessedFrame& self) { return py::cast(self.l3); });
+        .def_property_readonly("depth_map_l1", [](const ProcessedFrame& self) { return Array2Numpy(*self.depthMap_l1, cst::height, cst::width); })
+        .def_property_readonly("depth_map_l2", [](const ProcessedFrame& self) { return Array2Numpy(*self.depthMap_l2, cst::heightL2, cst::widthL2); })
+        .def_property_readonly("depth_map_l3", [](const ProcessedFrame& self) { return Array2Numpy(*self.depthMap_l3, cst::heightL3, cst::widthL3); });
 
     m.def("PopFrame", &PopFromQueue),
         R"pbdoc(
@@ -91,7 +70,5 @@ PYBIND11_MODULE(MeasurementModule, m) {
         .def_static("K", []() { return Array2Numpy(KinectFusion::getK(), 3, 3); })
         .def_static("K2", []() { return Array2Numpy(KinectFusion::getK2(), 3, 3); })
         .def_static("K3", []() { return Array2Numpy(KinectFusion::getK3(), 3, 3); })
-        .def_static("maxDepth", &KinectFusion::getMaxDepth)
-        .def_static("minDepth", &KinectFusion::getMinDepth)
         .def_static("set_cxx_running", &KinectFusion::SetCXXRunning);
 }

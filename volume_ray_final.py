@@ -127,7 +127,8 @@ class TSDF():
         self._voxel_size = torch.asarray(self._voxel_size).cuda()
 
     def integrate(self, depth_image, camera_pose: torch.Tensor, color_img, sdf_trunc=0.03):
-
+        map_width = 640
+        map_height = 480
         with torch.no_grad():
 
             world2cam = torch.inverse(
@@ -141,8 +142,8 @@ class TSDF():
             y_pix = torch.round(
                 (pts_camera[1] * self.fy)/z_points + self.cy).int()
 
-            valid_pix = (x_pix >= 0) & (x_pix < 320) & (
-                y_pix >= 0) & (y_pix < 240) & (z_points > 0)
+            valid_pix = (x_pix >= 0) & (x_pix < map_width) & (
+                y_pix >= 0) & (y_pix < map_height) & (z_points > 0)
             x_coords_valid = self.vox_coords[valid_pix, 0]
             y_coords_valid = self.vox_coords[valid_pix, 1]
             z_coords_valid = self.vox_coords[valid_pix, 2]
@@ -430,7 +431,7 @@ class TSDF():
 
         vox_grid.integrate(depth_im, cam_pose, img)
 
-        depth_rend, color_rend, vertex_rend, normal_rend, hit_surface_mask = vox_grid.render_model(cam_pose, cam_intr, 320, 240)
+        depth_rend, color_rend, vertex_rend, normal_rend, hit_surface_mask = vox_grid.render_model(cam_pose, cam_intr, map_width, map_height)
 
 
 '''

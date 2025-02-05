@@ -21,6 +21,8 @@ init_thread = None
 processing_thread = None
 optimizer = LM_optimizer(max_iterations=5)
 icp = ICP(optimizer=optimizer, occlusion_threshold=1, symmetric_error=True)
+map_width = 640
+map_height = 480
 
 
 def init_worker():
@@ -45,6 +47,8 @@ def pythonCallback():
 
 
 def process_frames():
+    global map_width, map_height
+
     last_frame = None
     d_max = 10000  # define allowed range of depth values in mm
     d_min = 0  # define allowed range of depth values in mm
@@ -67,7 +71,7 @@ def process_frames():
             k_l_3 = MeasurementModule.Device.K3()
 
             print("Computing volume bounds...")
-            volume_bounds = get_vol_bnds(last_frame.l1.depth_map, k_l_1, c2w)
+            volume_bounds = get_vol_bnds(last_frame.depth_map_l1, k_l_1, c2w)
             print("Computing voxel grid...")
             vox_grid = TSDF(volume_bounds, voxel_size=0.02, intristics=k_l_1)
             print("Voxel grid... Done!")
@@ -81,7 +85,7 @@ def process_frames():
             time.sleep(0.03)
             continue
 
-        depth_frame = current_frame.l1.depth_map
+        depth_frame = current_frame.depth_map_l1
 
         print("Preprocessing frame...")
         depth_frame[depth_frame == 65535] = 0
@@ -91,8 +95,8 @@ def process_frames():
         dep_pyr, rgb_pyr, vtx_pyr, nrm_pyr, mask_pyr = vox_grid.render_pyramid(
             c2w=c2w,
             intri=k_l_1,
-            imh=240,
-            imw=320,
+            imh=map_height,
+            imw=map_width,
             n_pyr=3,
             near=0.5,
             far=5.0
@@ -121,17 +125,17 @@ def calc_icp(
         k_l_3: np.ndarray,
         c2w: np.ndarray
 ):
-    t10 = icp(torch.tensor(current_frame.l3.depth_map, dtype=torch.float32).to(device),
+    t10 = icp(torch.tensor(current_frame.depth_map_l3, dtype=torch.float32).to(device),
               torch.tensor(tsdf_depth_pyramid[2], dtype=torch.float32).to(device),
               torch.tensor(np.identity(4), dtype=torch.float32).to(device),
               torch.tensor(k_l_3, dtype=torch.float32).to(device))
 
-    t10 = icp(torch.tensor(current_frame.l2.depth_map, dtype=torch.float32).to(device),
+    t10 = icp(torch.tensor(current_frame.depth_map_l2, dtype=torch.float32).to(device),
               torch.tensor(tsdf_depth_pyramid[1], dtype=torch.float32).to(device),
               t10,
               torch.tensor(k_l_2, dtype=torch.float32).to(device))
 
-    t10 = icp(torch.tensor(current_frame.l1.depth_map, dtype=torch.float32).to(device),
+    t10 = icp(torch.tensor(current_frame.depth_map_l1, dtype=torch.float32).to(device),
               torch.tensor(tsdf_depth_pyramid[0], dtype=torch.float32).to(device),
               t10,
               torch.tensor(k_l_1, dtype=torch.float32).to(device))
