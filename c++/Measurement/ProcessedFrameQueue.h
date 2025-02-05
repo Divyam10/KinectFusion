@@ -46,21 +46,15 @@ public:
 
     ~ProcessedFrameQueue() {}
 
-    void SetCallback(function<void()> pythonCallback) {
-        if (!pythonCallback) {
-            py::gil_scoped_acquire acquire;
-            PySys_WriteStdout("Python Callback is Null!\n");
-        }
-        
+    void SetCallback(function<void()> pythonCallback) {        
         this->callbackFunc = pythonCallback;
     }
 
     void Push(const ProcessedFrame& item) {
         {
             py::gil_scoped_acquire acquire;
-            PySys_WriteStdout("Push\n");
+            PySys_WriteStdout("Random pushing c++\n");
         }
-
         std::unique_lock<std::mutex> l(m);
 
         while (queue.size() >= queueSize) {
@@ -78,8 +72,10 @@ public:
 
             l.unlock();
 
-            py::gil_scoped_acquire acquire;
-            this->callbackFunc();
+            {
+                py::gil_scoped_acquire acquire;
+                this->callbackFunc();
+            }
         }
     }
 
@@ -93,6 +89,10 @@ public:
         queue.pop();
 
         l.unlock();
+        {
+            py::gil_scoped_acquire acquire;
+            PySys_WriteStdout("Popping from c++\n");
+        }
         return item;
     }
 
@@ -126,13 +126,18 @@ std::atomic<bool> ProcessedFrameQueue::isInitialized = false;
 // Python accessible method to pop a frame from the queue
 static optional<ProcessedFrame> PopFromQueue() {
     auto queue = ProcessedFrameQueue::Instance();
+    py::gil_scoped_acquire acquire;
+    if (!queue) {
+        PySys_WriteStdout("QUEUE INSTANCE GONERINO!\n");
+    }
+    else 
+        PySys_WriteStdout("QUEUE INSTANCE THERE!\n");
     return queue->Pop();
 }
 
 // Python accessible method to set callback on 2 frames
 static bool TrySetFrameCallback(std::function<void()> pythonCallback) {
     py::gil_scoped_acquire acquire;
-
     PySys_WriteStdout("Checking initialization\n");
 
     if (!ProcessedFrameQueue::IsInitialized()) {

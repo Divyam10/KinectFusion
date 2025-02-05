@@ -300,6 +300,10 @@ public:
 			//Notify the processing Thread(s)
 			frame_cv.notify_all();
 		}
+		{
+			py::gil_scoped_acquire acquire;
+			PySys_WriteStdout("IN ONQUEUE AFTER CRIT\n");
+		}
 	}
 
 
@@ -331,11 +335,15 @@ public:
 				currentFrame = move(frameTupleQueue->front());
 				frameTupleQueue->pop();
 			}	
+			this->ProcessFrame(move(currentFrame));
 			{
 				py::gil_scoped_acquire acquire;
-				PySys_WriteStdout("Process 1 frame\n");
+				PySys_WriteStdout("IN PROCESS FRAMES AFTER PROCESS FRAME\n");
 			}
-			this->ProcessFrame(move(currentFrame));
+		}
+		{
+			py::gil_scoped_acquire acquire;
+			PySys_WriteStdout("IN PROCESS FRAMES AFTER ISRUNNING = FALSE\n");
 		}
 	}
 
@@ -402,6 +410,10 @@ public:
 			cst::heightL2,
 			blockSize,
 			this->sigmaRange);
+		{
+			py::gil_scoped_acquire acquire;
+			PySys_WriteStdout("Before Push in c++\n");
+		}
 
 		processedFramesQueue->Push(
 			ProcessedFrame

@@ -95,12 +95,8 @@ class ICP(torch.nn.Module):
 
             Jf[mask] = 0.
             Jf = Jf.view(H*W, 1, -1)
-            print("NEXT CALL DOESNT WORK")
             delta_parameters = self.optimizer(residuals, Jf)
-            print("delta_parameters")
             pose = self.exp_se3(delta_parameters) @ pose
-            print(pose)
-
         return pose
 
     @staticmethod

@@ -15,14 +15,11 @@ elif torch.backends.mps.is_available():
 else:
     device = torch.device("cpu")
 
-processing_running = True
-frame_acquisition_thread = None
-init_thread = None
-processing_thread = None
 optimizer = LM_optimizer(max_iterations=5)
 icp = ICP(optimizer=optimizer, occlusion_threshold=1, symmetric_error=True)
 map_width = 640
 map_height = 480
+processing_running = True
 
 
 def init_worker():
@@ -38,6 +35,11 @@ def frame_acquisition_worker():
         print("trying\n")
         time.sleep(1)
     print("Queue Initialized!\n")
+
+
+frame_acquisition_thread = threading.Thread(target=frame_acquisition_worker)
+init_thread = threading.Thread(target=init_worker)
+processing_thread = threading.Thread(target=processing_worker)
 
 
 # TODO rename this func
@@ -71,18 +73,21 @@ def process_frames():
             k_l_3 = MeasurementModule.Device.K3()
 
             print("Computing volume bounds...")
-            volume_bounds = get_vol_bnds(last_frame.depth_map_l1, k_l_1, c2w)
+            # volume_bounds = get_vol_bnds(last_frame.depth_map_l1, k_l_1, c2w)
             print("Computing voxel grid...")
-            vox_grid = TSDF(volume_bounds, voxel_size=0.02, intristics=k_l_1)
+            # vox_grid = TSDF(volume_bounds, voxel_size=0.02, intristics=k_l_1)
             print("Voxel grid... Done!")
             continue
 
         # On new frame:
+        print("Fetching Frame")
         current_frame = MeasurementModule.PopFrame()
+
+        print("Frame Popped")
 
         if current_frame is None:
             print("Waiting for Frame...")
-            time.sleep(0.03)
+            time.sleep(3)
             continue
 
         depth_frame = current_frame.depth_map_l1
@@ -92,7 +97,7 @@ def process_frames():
 
         # TODO check near/far
         print("Synthesize model depth frame")
-        dep_pyr, rgb_pyr, vtx_pyr, nrm_pyr, mask_pyr = vox_grid.render_pyramid(
+        '''dep_pyr, rgb_pyr, vtx_pyr, nrm_pyr, mask_pyr = vox_grid.render_pyramid(
             c2w=c2w,
             intri=k_l_1,
             imh=map_height,
@@ -100,20 +105,24 @@ def process_frames():
             n_pyr=3,
             near=0.5,
             far=5.0
-        )
+        )'''
         print("Synthesis... Done!")
 
         print("Calculating ICP...")
+        # TODO remove this:
+        dep_pyr = [last_frame.depth_map_l1, last_frame.depth_map_l2, last_frame.depth_map_l3]
         c2w = calc_icp(current_frame, dep_pyr, k_l_1, k_l_2, k_l_3, c2w)
         print("ICP... Done!")
 
         print("Integrate new depth and color into model")
-        vox_grid.integrate(depth_frame, c2w, current_frame.color_map)
+        # vox_grid.integrate(depth_frame, c2w, current_frame.color_map)
         print("Integration... Done!")
 
         print("Performing Marching Cubes...")
-        get_mesh(vox_grid)
+        # get_mesh(vox_grid)
         print("Mesh generation... Done!")
+        # TODO remove
+        # time.sleep(1)
         continue
 
 
@@ -129,33 +138,33 @@ def calc_icp(
               torch.tensor(tsdf_depth_pyramid[2], dtype=torch.float32).to(device),
               torch.tensor(np.identity(4), dtype=torch.float32).to(device),
               torch.tensor(k_l_3, dtype=torch.float32).to(device))
-
+    print("icp l3")
+    print(t10)
     t10 = icp(torch.tensor(current_frame.depth_map_l2, dtype=torch.float32).to(device),
               torch.tensor(tsdf_depth_pyramid[1], dtype=torch.float32).to(device),
               t10,
               torch.tensor(k_l_2, dtype=torch.float32).to(device))
-
+    print("icp l2")
+    print(t10)
     t10 = icp(torch.tensor(current_frame.depth_map_l1, dtype=torch.float32).to(device),
               torch.tensor(tsdf_depth_pyramid[0], dtype=torch.float32).to(device),
               t10,
               torch.tensor(k_l_1, dtype=torch.float32).to(device))
-
+    print("icp l1")
+    print(t10)
     # TODO range/instead check for Null?
     '''if torch.allclose(t10, torch.eye(4).to(device), atol=1e-3):
         print("ICP failed or did not improve pose")
     else:
         c2w = c2w @ t10'''
-
-    c2w = c2w @ t10
+    c2w = c2w @ t10.cpu().numpy()
+    print("c2w")
+    print(c2w)
     return c2w
 
 
 def main() -> int:
     global frame_acquisition_thread, init_thread, processing_thread, processing_running
-
-    frame_acquisition_thread = threading.Thread(target=frame_acquisition_worker)
-    init_thread = threading.Thread(target=init_worker)
-    processing_thread = threading.Thread(target=processing_worker)
     user_input = None
 
     init_worker()
@@ -164,8 +173,9 @@ def main() -> int:
 
     while user_input is None:
         user_input = input("Press Something to exit: ")
-        time.sleep(1)
+        #time.sleep(10)
 
+    print("Shutting down")
     processing_running = False
     MeasurementModule.Device.set_cxx_running(False)
     frame_acquisition_thread.join()

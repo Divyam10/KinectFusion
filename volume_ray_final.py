@@ -126,13 +126,13 @@ class TSDF():
         self._vol_origin = torch.from_numpy(self._vol_origin).cuda()
         self._voxel_size = torch.asarray(self._voxel_size).cuda()
 
-    def integrate(self, depth_image, camera_pose: torch.Tensor, color_img, sdf_trunc=0.03):
+    def integrate(self, depth_image, camera_pose, color_img, sdf_trunc=0.03):
         map_width = 640
         map_height = 480
         with torch.no_grad():
 
             world2cam = torch.inverse(
-                camera_pose).float().cuda()
+                torch.from_numpy(camera_pose)).float().cuda()
             pts_camera = torch.matmul(
                 world2cam, torch.t(self.vox_Wcoords))
             z_points = pts_camera[2]
