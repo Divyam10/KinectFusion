@@ -64,6 +64,10 @@ PYBIND11_MODULE(MeasurementModule, m) {
         R"pbdoc(
             Starts StartProcessingThread
     )pbdoc");
+    m.def("SetPythonProcessing", &SetPythonProcessing,
+        R"pbdoc(
+            Set to false after calcs
+    )pbdoc");
 
 
     py::class_<KinectFusion>(m, "Device")

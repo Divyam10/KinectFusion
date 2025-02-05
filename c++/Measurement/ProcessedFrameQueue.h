@@ -13,7 +13,7 @@ namespace py = pybind11;
 
 class ProcessedFrameQueue {
 public:
-
+    atomic<bool> isPythonProcessing{ false };
     // Create Singleton
     static std::shared_ptr<ProcessedFrameQueue> Init(
         std::atomic<bool>& isRunning,
@@ -30,7 +30,7 @@ public:
     static std::shared_ptr<ProcessedFrameQueue> Instance() {
         if (!instance) {
             py::gil_scoped_acquire acquire;
-            PySys_WriteStdout("Queue Instance is Null!\n");
+            PySys_WriteStdout("C++ Queue Instance is Null!\n");
         }
         return instance;
     }
@@ -51,10 +51,6 @@ public:
     }
 
     void Push(const ProcessedFrame& item) {
-        {
-            py::gil_scoped_acquire acquire;
-            PySys_WriteStdout("Random pushing c++\n");
-        }
         std::unique_lock<std::mutex> l(m);
 
         while (queue.size() >= queueSize) {
@@ -63,19 +59,12 @@ public:
 
         queue.push(item);
 
-        //On 2 Frames call callback once, dont increase variable further
-        if (this->elementCumCount < 1) {
-            this->elementCumCount++;
-        }
-        else if (this->elementCumCount == 1){
-            elementCumCount++;
+        l.unlock();
 
-            l.unlock();
-
-            {
-                py::gil_scoped_acquire acquire;
-                this->callbackFunc();
-            }
+        if (!this->isPythonProcessing) {
+            py::gil_scoped_acquire acquire;
+            PySys_WriteStdout("C++ Callback called\n");
+            this->callbackFunc();
         }
     }
 
@@ -88,11 +77,10 @@ public:
         ProcessedFrame item = queue.front();
         queue.pop();
 
+        isPythonProcessing = true;
+
         l.unlock();
-        {
-            py::gil_scoped_acquire acquire;
-            PySys_WriteStdout("Popping from c++\n");
-        }
+
         return item;
     }
 
@@ -104,6 +92,8 @@ private:
     static std::once_flag initFlag;  
 
     static std::atomic<bool> isInitialized;
+
+
 
     // Singleton safety
     ProcessedFrameQueue(const ProcessedFrameQueue&) = delete;
@@ -126,33 +116,33 @@ std::atomic<bool> ProcessedFrameQueue::isInitialized = false;
 // Python accessible method to pop a frame from the queue
 static optional<ProcessedFrame> PopFromQueue() {
     auto queue = ProcessedFrameQueue::Instance();
-    py::gil_scoped_acquire acquire;
-    if (!queue) {
-        PySys_WriteStdout("QUEUE INSTANCE GONERINO!\n");
-    }
-    else 
-        PySys_WriteStdout("QUEUE INSTANCE THERE!\n");
     return queue->Pop();
 }
 
 // Python accessible method to set callback on 2 frames
 static bool TrySetFrameCallback(std::function<void()> pythonCallback) {
     py::gil_scoped_acquire acquire;
-    PySys_WriteStdout("Checking initialization\n");
+    PySys_WriteStdout("C++ Checking initialization\n");
 
     if (!ProcessedFrameQueue::IsInitialized()) {
         return false;
     }
 
-    PySys_WriteStdout("Now Initialized!\n");
+    PySys_WriteStdout("C++ Now Initialized!\n");
 
     auto queue = ProcessedFrameQueue::Instance();
 
     if (queue == nullptr || queue == NULL)
-        PySys_WriteStdout("Queue NULL!\n");
+        PySys_WriteStdout("C++ Queue NULL!\n");
     
     queue->SetCallback(pythonCallback);
 
-    PySys_WriteStdout("Initialized and callback set\n");
+    PySys_WriteStdout("C++ Initialized and callback set\n");
     return true;
+}
+
+// TODO I think this should always set it to false when its done...
+static void SetPythonProcessing(bool isProcessing) {
+    auto queue = ProcessedFrameQueue::Instance();
+    queue->isPythonProcessing = isProcessing;
 }

@@ -12,19 +12,20 @@ static void HandleKeyPresses(atomic<bool>& isRunning);
 shared_ptr<KinectFusion> kinectFusion;
 thread kinectFusionThread;
 thread processingThread;
+std::condition_variable frame_cv;
+atomic<bool> isRunning = true;
 
 /*
 * Called by Python with "OnFrame" Callback
 */
 static int CxxMain() {
-	atomic<bool> isRunning = true;
 	promise<void> initPromise;
 	future<void> initFuture = initPromise.get_future();
 
 	try
 	{
 		//Construct in main thread
-		kinectFusion = make_shared<KinectFusion>(isRunning);
+		kinectFusion = make_shared<KinectFusion>(isRunning, frame_cv);
 
 		//Init on worker thread
 		kinectFusionThread = thread(InitKinectFusion, kinectFusion, ref(initPromise));
@@ -52,7 +53,7 @@ static int CxxMain() {
 }
 
 static void StartProcessing() {
-	kinectFusion->ProcessFrames();
+	kinectFusion->ProcessFrames(frame_cv);
 }
 
 static void StartProcessingThread() {

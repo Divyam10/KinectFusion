@@ -1,6 +1,4 @@
 import sys
-import numpy as np
-import torch
 import MeasurementModule
 import time
 from icp.levenberg_marquardt import LM_optimizer
@@ -21,109 +19,102 @@ map_width = 640
 map_height = 480
 processing_running = True
 
-
-def init_worker():
-    MeasurementModule.Init()
-
-
 def processing_worker():
     MeasurementModule.StartProcessingThread()
 
 
-def frame_acquisition_worker():
+def frame_callback_setup_worker():
     while not MeasurementModule.FrameCallback(pythonCallback):
         print("trying\n")
-        time.sleep(1)
-    print("Queue Initialized!\n")
+        time.sleep(0.1)
+    print("Callback set up!\n")
 
 
-frame_acquisition_thread = threading.Thread(target=frame_acquisition_worker)
-init_thread = threading.Thread(target=init_worker)
+callback_setup_thread = threading.Thread(target=frame_callback_setup_worker)
 processing_thread = threading.Thread(target=processing_worker)
+
+last_frame = None
+k_l_1 = None
+k_l_2 = None
+k_l_3 = None
+c2w = np.eye(4)
+vox_grid = None
+python_calc = False
 
 
 # TODO rename this func
 def pythonCallback():
-    print("2 frames available.")
-    process_frames()
+    global python_calc
+    print("c++ callback in python.")
+    if python_calc:
+        return
+    python_calc = True
+    # actual_processing_thread.start()
+    process_frame()
 
 
-def process_frames():
-    global map_width, map_height
+def process_frame():
+    global map_width, map_height, last_frame, k_l_1, k_l_2, k_l_3, c2w, vox_grid, python_calc
+    print("Processing frame...")
 
-    last_frame = None
-    d_max = 10000  # define allowed range of depth values in mm
-    d_min = 0  # define allowed range of depth values in mm
-    k_l_1 = None
-    k_l_2 = None
-    k_l_3 = None
-    c2w = np.eye(4)
-    vox_grid = None
+    # Init Logic for the first frame
+    if last_frame is None:
+        print("Initializing first frame...")
+        last_frame = MeasurementModule.PopFrame()
 
-    print("Processing frames...")
+        k_l_1 = MeasurementModule.Device.K()
+        k_l_2 = MeasurementModule.Device.K2()
+        k_l_3 = MeasurementModule.Device.K3()
 
-    while processing_running:
-        # Init Logic for the first frame
-        if last_frame is None:
-            print("Initializing first frame...")
-            last_frame = MeasurementModule.PopFrame()
+        print("Computing volume bounds...")
+        # volume_bounds = get_vol_bnds(last_frame.depth_map_l1, k_l_1, c2w)
+        print("Computing voxel grid...")
+        # vox_grid = TSDF(volume_bounds, voxel_size=0.02, intristics=k_l_1)
+        print("Voxel grid... Done!")
+        python_calc = False
+        MeasurementModule.SetPythonProcessing(False)
+        return
 
-            k_l_1 = MeasurementModule.Device.K()
-            k_l_2 = MeasurementModule.Device.K2()
-            k_l_3 = MeasurementModule.Device.K3()
+    # On new frame:
+    print("Fetching Frame")
+    current_frame = MeasurementModule.PopFrame()
 
-            print("Computing volume bounds...")
-            # volume_bounds = get_vol_bnds(last_frame.depth_map_l1, k_l_1, c2w)
-            print("Computing voxel grid...")
-            # vox_grid = TSDF(volume_bounds, voxel_size=0.02, intristics=k_l_1)
-            print("Voxel grid... Done!")
-            continue
+    print("Frame Popped")
 
-        # On new frame:
-        print("Fetching Frame")
-        current_frame = MeasurementModule.PopFrame()
+    depth_frame = current_frame.depth_map_l1
 
-        print("Frame Popped")
+    print("Preprocessing frame...")
+    depth_frame[depth_frame == 65535] = 0
 
-        if current_frame is None:
-            print("Waiting for Frame...")
-            time.sleep(3)
-            continue
+    # TODO check near/far
+    print("Synthesize model depth frame")
+    '''dep_pyr, rgb_pyr, vtx_pyr, nrm_pyr, mask_pyr = vox_grid.render_pyramid(
+        c2w=c2w,
+        intri=k_l_1,
+        imh=map_height,
+        imw=map_width,
+        n_pyr=3,
+        near=0.5,
+        far=5.0
+    )'''
+    print("Synthesis... Done!")
 
-        depth_frame = current_frame.depth_map_l1
+    print("Calculating ICP...")
+    # TODO remove this:
+    dep_pyr = [last_frame.depth_map_l1, last_frame.depth_map_l2, last_frame.depth_map_l3]
+    c2w = calc_icp(current_frame, dep_pyr, k_l_1, k_l_2, k_l_3, c2w)
+    print("ICP... Done!")
 
-        print("Preprocessing frame...")
-        depth_frame[depth_frame == 65535] = 0
+    print("Integrate new depth and color into model")
+    # vox_grid.integrate(depth_frame, c2w, current_frame.color_map)
+    print("Integration... Done!")
 
-        # TODO check near/far
-        print("Synthesize model depth frame")
-        '''dep_pyr, rgb_pyr, vtx_pyr, nrm_pyr, mask_pyr = vox_grid.render_pyramid(
-            c2w=c2w,
-            intri=k_l_1,
-            imh=map_height,
-            imw=map_width,
-            n_pyr=3,
-            near=0.5,
-            far=5.0
-        )'''
-        print("Synthesis... Done!")
-
-        print("Calculating ICP...")
-        # TODO remove this:
-        dep_pyr = [last_frame.depth_map_l1, last_frame.depth_map_l2, last_frame.depth_map_l3]
-        c2w = calc_icp(current_frame, dep_pyr, k_l_1, k_l_2, k_l_3, c2w)
-        print("ICP... Done!")
-
-        print("Integrate new depth and color into model")
-        # vox_grid.integrate(depth_frame, c2w, current_frame.color_map)
-        print("Integration... Done!")
-
-        print("Performing Marching Cubes...")
-        # get_mesh(vox_grid)
-        print("Mesh generation... Done!")
-        # TODO remove
-        # time.sleep(1)
-        continue
+    print("Performing Marching Cubes...")
+    # get_mesh(vox_grid)
+    print("Mesh generation... Done!")
+    python_calc = False
+    MeasurementModule.SetPythonProcessing(False)
+    return
 
 
 def calc_icp(
@@ -164,21 +155,20 @@ def calc_icp(
 
 
 def main() -> int:
-    global frame_acquisition_thread, init_thread, processing_thread, processing_running
+    global callback_setup_thread, processing_thread, processing_running
     user_input = None
 
-    init_worker()
-    frame_acquisition_thread.start()
+    MeasurementModule.Init()
+    callback_setup_thread.start()
     processing_thread.start()
 
     while user_input is None:
         user_input = input("Press Something to exit: ")
-        #time.sleep(10)
 
     print("Shutting down")
     processing_running = False
     MeasurementModule.Device.set_cxx_running(False)
-    frame_acquisition_thread.join()
+    callback_setup_thread.join()
     processing_thread.join()
 
     print("All threads stopped. Exiting.")

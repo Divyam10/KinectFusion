@@ -73,7 +73,7 @@ public:
 	unique_ptr<queue<unique_ptr<FrameTuple>>> frameTupleQueue;
 	shared_ptr<ProcessedFrameQueue> processedFramesQueue; //Passed to Python Shared -> NEEDS to be copyable for python / pybind
 	mutex frame_queue_mtx;
-	condition_variable frame_cv;
+	condition_variable& frame_cv;
 	VideoMode depthVideoMode; 
 	VideoMode colorVideoMode;
 	array<float, 9> K; //Passed to Python
@@ -85,13 +85,14 @@ public:
 	const int sigmaRange = 100;  //Adjustable!
 	atomic<bool>& isRunning;
 
-	KinectFusion(atomic<bool>& isRunning)
+	KinectFusion(atomic<bool>& isRunning, std::condition_variable& frame_cv)
 		: colorFrameQueue(make_shared<queue<unique_ptr<VideoFrameRef>>>()),
 		depthFrameQueue(make_shared<queue<unique_ptr<VideoFrameRef>>>()),
 		frameTupleQueue(make_unique<queue<unique_ptr<FrameTuple>>>()),
 		isRunning(isRunning),
 		//Init Queue Singleton
-		processedFramesQueue(ProcessedFrameQueue::Init(isRunning, queueSizeLimit))
+		processedFramesQueue(ProcessedFrameQueue::Init(isRunning, queueSizeLimit)),
+		frame_cv(frame_cv)
 	{
 		//TODO REALLY REALLY UGLY NO SAFEGUARDS
 		if (instance != nullptr)
@@ -300,21 +301,12 @@ public:
 			//Notify the processing Thread(s)
 			frame_cv.notify_all();
 		}
-		{
-			py::gil_scoped_acquire acquire;
-			PySys_WriteStdout("IN ONQUEUE AFTER CRIT\n");
-		}
 	}
 
 
-	void ProcessFrames()
+	void ProcessFrames(std::condition_variable& frame_cv)
 	{
 		unique_ptr<FrameTuple> currentFrame;
-		{
-			//TODO remove this
-			py::gil_scoped_acquire acquire;
-			PySys_WriteStdout("ProcessFrames init\n");
-		}
 
 		while (isRunning)
 		{
@@ -336,14 +328,6 @@ public:
 				frameTupleQueue->pop();
 			}	
 			this->ProcessFrame(move(currentFrame));
-			{
-				py::gil_scoped_acquire acquire;
-				PySys_WriteStdout("IN PROCESS FRAMES AFTER PROCESS FRAME\n");
-			}
-		}
-		{
-			py::gil_scoped_acquire acquire;
-			PySys_WriteStdout("IN PROCESS FRAMES AFTER ISRUNNING = FALSE\n");
 		}
 	}
 
@@ -410,10 +394,6 @@ public:
 			cst::heightL2,
 			blockSize,
 			this->sigmaRange);
-		{
-			py::gil_scoped_acquire acquire;
-			PySys_WriteStdout("Before Push in c++\n");
-		}
 
 		processedFramesQueue->Push(
 			ProcessedFrame
