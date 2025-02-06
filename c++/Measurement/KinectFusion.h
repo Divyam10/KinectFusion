@@ -306,6 +306,10 @@ public:
 
 	void ProcessFrames(std::condition_variable& frame_cv)
 	{
+		{
+			py::gil_scoped_acquire acquire;
+			PySys_WriteStdout("c++ started processing\n");
+		}
 		unique_ptr<FrameTuple> currentFrame;
 
 		while (isRunning)

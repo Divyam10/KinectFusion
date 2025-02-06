@@ -62,3 +62,12 @@ tzdata==2024.2
 urllib3==2.3.0
 Werkzeug==3.0.6
 zipp==3.21.0
+
+setuptools~=65.5.0
+jupyter~=1.1.1
+pip~=23.2.1
+tornado~=6.4.2
+overrides~=7.7.0
+cffi~=1.17.1
+primesense~=2.2.0.30.post5
+scikit-image~=0.25.0

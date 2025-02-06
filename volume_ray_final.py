@@ -15,10 +15,10 @@ def rigid_transform(xyz, transform):
 
 
 def get_view_frustum(depth_im, cam_intr, cam_pose):
-
-    im_h = depth_im.shape[0]
-    im_w = depth_im.shape[1]
-    max_depth = np.max(depth_im)
+    depth_im_np = depth_im.cpu().numpy()
+    im_h = depth_im_np.shape[0]
+    im_w = depth_im_np.shape[1]
+    max_depth = np.max(depth_im_np)
     view_frust_pts = np.array([
         (np.array([0, 0, 0, im_w, im_w])-cam_intr[0, 2])*np.array([0,
                                                                    max_depth, max_depth, max_depth, max_depth])/cam_intr[0, 0],
@@ -77,7 +77,7 @@ def get_mesh(vox_grid):
 
 class TSDF():
 
-    def __init__(self, vol_dim, intristics, voxel_size=0.01):
+    def __init__(self, vol_dim, intristics, voxel_size=1):
 
         # self._vol_dim = vol_dim
         self._vol_bnds = vol_dim
@@ -370,7 +370,7 @@ class TSDF():
         return depth_rend, color_rend, vertex_rend, normal_rend, hit_surface_mask
 
     def render_pyramid(self, c2w, intri, imh, imw, n_pyr=4, near=500., far=5000., n_samples=192):
-        K = intri.clone()
+        K = intri.copy()
         dep_pyr, rgb_pyr, vtx_pyr, nrm_pyr, mask_pyr = [], [], [], [], []
         for l in range(n_pyr):
             dep, rgb, feat, vtx, nrm, mask = self.render_model(

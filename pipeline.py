@@ -1,146 +1,100 @@
-import sys
-import MeasurementModule
-import time
+import torch
+
 from icp.levenberg_marquardt import LM_optimizer
 from icp.icp import ICP
 from volume_ray_final import *
+from primesense import openni2
 import threading
+import numpy as np
+import matplotlib
 
-if torch.cuda.is_available():
-    device = torch.device("cuda")
-elif torch.backends.mps.is_available():
-    device = torch.device("mps")
-else:
-    device = torch.device("cpu")
+matplotlib.use('TkAgg')
+import matplotlib.pyplot as plt
+# from bilateral_filter import launch_bilateral_filtering_kernel
+from block_averaging_subsampling import block_averaging
 
+is_running = threading.Event()
+cuda_device = None
 optimizer = LM_optimizer(max_iterations=5)
-icp = ICP(optimizer=optimizer, occlusion_threshold=1, symmetric_error=True)
-map_width = 640
-map_height = 480
-processing_running = True
-
-def processing_worker():
-    MeasurementModule.StartProcessingThread()
+icp = ICP(optimizer=None, occlusion_threshold=1, symmetric_error=True)
 
 
-def frame_callback_setup_worker():
-    while not MeasurementModule.FrameCallback(pythonCallback):
-        print("trying\n")
-        time.sleep(0.1)
-    print("Callback set up!\n")
+def device_init():
+    # Constants
+    height = 480
+    width = 640
+    height_l2 = height // 2
+    width_l2 = width // 2
+    height_l3 = height_l2 // 2
+    width_l3 = width_l2 // 2
+    fps = 30
 
+    openni2.initialize()  # can also accept the path of the OpenNI redistribution
 
-callback_setup_thread = threading.Thread(target=frame_callback_setup_worker)
-processing_thread = threading.Thread(target=processing_worker)
+    dev = openni2.Device.open_any()
+    dev.set_depth_color_sync_enabled(True)
 
-last_frame = None
-k_l_1 = None
-k_l_2 = None
-k_l_3 = None
-c2w = np.eye(4)
-vox_grid = None
-python_calc = False
+    depth_stream = dev.create_depth_stream()
+    color_stream = dev.create_color_stream()
 
+    depth_stream.configure_mode(width, height, fps, openni2.PIXEL_FORMAT_DEPTH_1_MM)
+    color_stream.configure_mode(width, height, fps, openni2.PIXEL_FORMAT_RGB888)
 
-# TODO rename this func
-def pythonCallback():
-    global python_calc
-    print("c++ callback in python.")
-    if python_calc:
-        return
-    python_calc = True
-    # actual_processing_thread.start()
-    process_frame()
+    depth_stream.start()
+    color_stream.start()
 
+    dev.set_image_registration_mode(openni2.IMAGE_REGISTRATION_DEPTH_TO_COLOR)
 
-def process_frame():
-    global map_width, map_height, last_frame, k_l_1, k_l_2, k_l_3, c2w, vox_grid, python_calc
-    print("Processing frame...")
+    depth_max = depth_stream.get_max_pixel_value()
+    depth_min = depth_stream.get_min_pixel_value()
 
-    # Init Logic for the first frame
-    if last_frame is None:
-        print("Initializing first frame...")
-        last_frame = MeasurementModule.PopFrame()
+    fx = (0.5 * width) // np.tan(0.5 * depth_stream.get_horizontal_fov())
+    fy = (0.5 * height) // np.tan(0.5 * depth_stream.get_vertical_fov())
+    px = width // 2.0
+    py = height // 2.0
 
-        k_l_1 = MeasurementModule.Device.K()
-        k_l_2 = MeasurementModule.Device.K2()
-        k_l_3 = MeasurementModule.Device.K3()
-
-        print("Computing volume bounds...")
-        # volume_bounds = get_vol_bnds(last_frame.depth_map_l1, k_l_1, c2w)
-        print("Computing voxel grid...")
-        # vox_grid = TSDF(volume_bounds, voxel_size=0.02, intristics=k_l_1)
-        print("Voxel grid... Done!")
-        python_calc = False
-        MeasurementModule.SetPythonProcessing(False)
-        return
-
-    # On new frame:
-    print("Fetching Frame")
-    current_frame = MeasurementModule.PopFrame()
-
-    print("Frame Popped")
-
-    depth_frame = current_frame.depth_map_l1
-
-    print("Preprocessing frame...")
-    depth_frame[depth_frame == 65535] = 0
-
-    # TODO check near/far
-    print("Synthesize model depth frame")
-    '''dep_pyr, rgb_pyr, vtx_pyr, nrm_pyr, mask_pyr = vox_grid.render_pyramid(
-        c2w=c2w,
-        intri=k_l_1,
-        imh=map_height,
-        imw=map_width,
-        n_pyr=3,
-        near=0.5,
-        far=5.0
-    )'''
-    print("Synthesis... Done!")
-
-    print("Calculating ICP...")
-    # TODO remove this:
-    dep_pyr = [last_frame.depth_map_l1, last_frame.depth_map_l2, last_frame.depth_map_l3]
-    c2w = calc_icp(current_frame, dep_pyr, k_l_1, k_l_2, k_l_3, c2w)
-    print("ICP... Done!")
-
-    print("Integrate new depth and color into model")
-    # vox_grid.integrate(depth_frame, c2w, current_frame.color_map)
-    print("Integration... Done!")
-
-    print("Performing Marching Cubes...")
-    # get_mesh(vox_grid)
-    print("Mesh generation... Done!")
-    python_calc = False
-    MeasurementModule.SetPythonProcessing(False)
-    return
+    k1 = np.array([
+        [fx, 0.0, px],
+        [0.0, fy, py],
+        [0.0, 0.0, 1.0]
+    ], dtype=np.float32)
+    k2 = np.array([
+        [0.5 * fx, 0.0, 0.5 * px],
+        [0.0, 0.5 * fy, 0.5 * py],
+        [0.0, 0.0, 1.0]
+    ], dtype=np.float32)
+    k3 = np.array([
+        [0.25 * fx, 0.0, 0.25 * px],
+        [0.0, 0.25 * fy, 0.25 * py],
+        [0.0, 0.0, 1.0]
+    ], dtype=np.float32)
+    k_pyr = [k1, k2, k3]
+    return dev, depth_stream, color_stream, depth_min, depth_max, k_pyr, width, height, width_l2, width_l3, height_l2, height_l3
 
 
 def calc_icp(
-        current_frame: MeasurementModule.ProcessedFrame,
-        tsdf_depth_pyramid: list,
-        k_l_1: np.ndarray,
-        k_l_2: np.ndarray,
-        k_l_3: np.ndarray,
+        depth_pyr: list,
+        tsdf_depth_pyr: list,
+        k_pyr: list,
         c2w: np.ndarray
 ):
-    t10 = icp(torch.tensor(current_frame.depth_map_l3, dtype=torch.float32).to(device),
-              torch.tensor(tsdf_depth_pyramid[2], dtype=torch.float32).to(device),
-              torch.tensor(np.identity(4), dtype=torch.float32).to(device),
-              torch.tensor(k_l_3, dtype=torch.float32).to(device))
+    global icp, cuda_device
+    t10 = icp(depth_pyr[2].to(torch.float32),
+              tsdf_depth_pyr[2],
+              torch.tensor(np.identity(4), dtype=torch.float32).to(cuda_device),
+              torch.tensor(k_pyr[2], dtype=torch.float32).to(cuda_device))
     print("icp l3")
     print(t10)
-    t10 = icp(torch.tensor(current_frame.depth_map_l2, dtype=torch.float32).to(device),
-              torch.tensor(tsdf_depth_pyramid[1], dtype=torch.float32).to(device),
+    t10 = icp(depth_pyr[1].to(torch.float32),
+              tsdf_depth_pyr[1],
               t10,
-              torch.tensor(k_l_2, dtype=torch.float32).to(device))
+              torch.tensor(k_pyr[1], dtype=torch.float32).to(cuda_device))
     print("icp l2")
     print(t10)
-    t10 = icp(torch.tensor(current_frame.depth_map_l1, dtype=torch.float32).to(device),
-              torch.tensor(tsdf_depth_pyramid[0], dtype=torch.float32).to(device),
+    t10 = icp(depth_pyr[0].to(torch.float32),
+              tsdf_depth_pyr[0],
               t10,
-              torch.tensor(k_l_1, dtype=torch.float32).to(device))
+              torch.tensor(k_pyr[0], dtype=torch.float32).to(cuda_device))
     print("icp l1")
     print(t10)
     # TODO range/instead check for Null?
@@ -148,38 +102,150 @@ def calc_icp(
         print("ICP failed or did not improve pose")
     else:
         c2w = c2w @ t10'''
+    torch.cuda.synchronize()  # TODO maybe not necessary
     c2w = c2w @ t10.cpu().numpy()
     print("c2w")
     print(c2w)
     return c2w
 
 
-def main() -> int:
-    global callback_setup_thread, processing_thread, processing_running
-    user_input = None
+def process_frames(depth_stream, color_stream, depth_min, depth_max, k_pyr, width, height, width_l2, width_l3,
+                   height_l2, height_l3, sigma_spatial, sigma_range):
+    global is_running, cuda_device
 
-    MeasurementModule.Init()
-    callback_setup_thread.start()
-    processing_thread.start()
+    c2w = np.eye(4)
+    volume_bounds = None
+    vox_grid = None
+    last_frame = None
 
-    while user_input is None:
-        user_input = input("Press Something to exit: ")
+    while is_running.is_set():
+        print("Loop iteration\n")
+        depth_frame = depth_stream.read_frame()
+        color_frame = color_stream.read_frame()
 
-    print("Shutting down")
-    processing_running = False
-    MeasurementModule.Device.set_cxx_running(False)
-    callback_setup_thread.join()
-    processing_thread.join()
+        print("Received frame\n")
+        print("Preprocessing...\n")
+        print("Reshaping")
+        depth_frame_data = torch.frombuffer(depth_frame.get_buffer_as_uint16(), dtype=torch.uint16).reshape((height, width))
+        depth_frame_data = depth_frame_data.to(torch.float32).to(cuda_device)
+        color_map = torch.frombuffer(color_frame.get_buffer_as_uint8(), dtype=torch.uint8).reshape((height, width, 3))
+        print("Reshaping Done")
 
-    print("All threads stopped. Exiting.")
-    return 0
+        # TODO
+        '''depth_map_l1, validity_mask = launch_bilateral_filtering_kernel(
+            depth_frame_data, sigma_spatial, sigma_range, depth_min, depth_max, width, height
+        )'''
+        depth_map_l2 = block_averaging(
+            depth_frame_data, 2, sigma_range
+        )
+        depth_map_l3 = block_averaging(
+            depth_map_l2, 2, sigma_range
+        )
+        print("Block averaging done")
+        depth_map_l1 = depth_frame_data.to(torch.uint16)
+        depth_map_l2 = depth_map_l2.to(torch.uint16)
+        depth_map_l3 = depth_map_l3.to(torch.uint16)
+        print("Conversion to uint16 done")
+
+        dep_pyr = [depth_map_l1, depth_map_l2, depth_map_l3]
+        current_frame = [color_map, dep_pyr]
+
+        if last_frame is None:
+            print("First Frame...")
+            print("Computing volume bounds...")
+            volume_bounds = get_vol_bnds(depth_frame_data, k_pyr[0], c2w)
+            print("Computing voxel grid...")
+            vox_grid = TSDF(volume_bounds, voxel_size=2, intristics=k_pyr[0])
+            print("Voxel grid... Done!")
+            last_frame = current_frame
+            continue
+
+        # TODO ? depth_frame[depth_frame == 65535] = 0
+
+        print("Synthesize model depth frame")
+        tsdf_dep_pyr, rgb_pyr, vtx_pyr, nrm_pyr, mask_pyr = vox_grid.render_pyramid(
+            c2w=c2w,
+            intri=k_pyr[0],
+            imh=height,
+            imw=width,
+            n_pyr=3,
+            near=0.5,
+            far=5.0
+        )
+        print("Synthesis... Done!")
+
+        print("Calculating ICP...")
+        # TODO change 2nd param to tsdf this:
+        c2w = calc_icp(dep_pyr, tsdf_dep_pyr, k_pyr, c2w)
+        print("ICP... Done!")
+        print(c2w)
+        print("Integrate new depth and color into model")
+        # vox_grid.integrate(current_frame[1], c2w, current_frame[0])
+        print("Integration... Done!")
+
+        print("Performing Marching Cubes...")
+        # get_mesh(vox_grid)
+        print("Mesh generation... Done!")
+
+        '''        plt.figure(figsize=(10, 10))
+
+        # Plot L1 (Original + Bilateral Filtered Depth Map)
+        plt.subplot(1, 3, 1)
+        plt.imshow(depth_frame_data.cpu().numpy(), cmap='gray')
+        plt.title("Depth Map L1")
+        plt.axis('off')
+
+        # Plot L2 (Subsampled Depth Map)
+        plt.subplot(1, 3, 2)
+        plt.imshow(depth_map_l2.cpu().numpy(), cmap='gray')
+        plt.title("Depth Map L2")
+        plt.axis('off')
+
+        # Plot L3 (Further Subsampled Depth Map)
+        plt.subplot(1, 3, 3)
+        plt.imshow(depth_map_l3.cpu().numpy(), cmap='gray')
+        plt.title("Depth Map L3")
+        plt.axis('off')
+
+        # Display the plots
+        plt.show()'''
+
+        # Reset frames:
+        depth_frame = None
+        color_frame = None
+        continue
+
+        # print("Preprocessing... done!\n")
 
 
+def shutdown(dev, depth_stream, color_stream):
+    depth_stream.stop()
+    color_stream.stop()
+    openni2.unload()
+
+
+def main():
+    global is_running, cuda_device
+
+    if torch.cuda.is_available():
+        print("Using CUDA")
+        cuda_device = torch.device("cuda")
+    elif torch.backends.mps.is_available():
+        print("Using MPS")
+        cuda_device = torch.device("mps")
+    else:
+        print("Using CPU")
+        cuda_device = torch.device("cpu")
+
+    sigma_spatial = 10
+    sigma_range = 100
+
+    dev, depth_stream, color_stream, depth_min, depth_max, k_pyr, width, height, width_l2, width_l3, height_l2, height_l3 = device_init()
+    is_running.set()
+    process_frames(depth_stream, color_stream, depth_min, depth_max, k_pyr, width, height, width_l2, width_l3,
+                   height_l2, height_l3, sigma_spatial, sigma_range)
+
+
+# Press the green button in the gutter to run the script.
 if __name__ == '__main__':
-    sys.exit(main())
-
-# start_time = time.time()
-# end_time = time.time()
-# elapsed_time = end_time - start_time
-# with open("C:/Users/steph/Documents/Projekte/KinectFusion/processing_time.txt", "a") as f:
-# f.write(f"{elapsed_time}\n")
+    main()

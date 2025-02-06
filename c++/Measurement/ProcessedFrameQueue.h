@@ -81,6 +81,7 @@ public:
 
         l.unlock();
 
+        py::gil_scoped_acquire acquire;
         return item;
     }
 
