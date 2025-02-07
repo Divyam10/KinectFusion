@@ -16,7 +16,7 @@ from block_averaging_subsampling import block_averaging
 is_running = threading.Event()
 cuda_device = None
 optimizer = LM_optimizer(max_iterations=5)
-icp = ICP(optimizer=optimizer, occlusion_threshold=1*1000, symmetric_error=True)
+icp = ICP(optimizer=optimizer, symmetric_error=True)
 
 
 def device_init():
@@ -141,6 +141,7 @@ def process_frames(depth_stream, color_stream, depth_min, depth_max, k_pyr, widt
         depth_map_l2 = depth_map_l2.to(torch.uint16)
         depth_map_l3 = depth_map_l3.to(torch.uint16)
         dep_pyr = [depth_map_l1, depth_map_l2, depth_map_l3]
+        # TODO ? depth_frame[depth_frame == 65535] = 0
 
         current_frame = [color_map, dep_pyr]
 
@@ -154,7 +155,6 @@ def process_frames(depth_stream, color_stream, depth_min, depth_max, k_pyr, widt
             last_frame = current_frame
             continue
 
-        # TODO ? depth_frame[depth_frame == 65535] = 0
 
         tsdf_dep_pyr, rgb_pyr, vtx_pyr, nrm_pyr, mask_pyr = vox_grid.render_pyramid(
             c2w=c2w,
