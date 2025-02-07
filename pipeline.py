@@ -10,13 +10,13 @@ import matplotlib
 
 matplotlib.use('TkAgg')
 import matplotlib.pyplot as plt
-# from bilateral_filter import launch_bilateral_filtering_kernel
+from bilateral_filter import bilateral_filtering
 from block_averaging_subsampling import block_averaging
 
 is_running = threading.Event()
 cuda_device = None
 optimizer = LM_optimizer(max_iterations=5)
-icp = ICP(optimizer=optimizer, symmetric_error=True)
+icp = ICP(optimizer=None, symmetric_error=True)
 
 
 def device_init():
@@ -44,6 +44,16 @@ def device_init():
     color_stream.start()
 
     dev.set_image_registration_mode(openni2.IMAGE_REGISTRATION_DEPTH_TO_COLOR)
+
+    cam_settings = color_stream.camera
+
+    if cam_settings:
+        print("Disabling auto exposure and white balance")
+        cam_settings.set_auto_exposure(False)
+        cam_settings.set_auto_white_balance(False)
+        color_stream.camera = cam_settings
+    else:
+        print("No cam settings")
 
     depth_max = depth_stream.get_max_pixel_value()
     depth_min = depth_stream.get_min_pixel_value()
@@ -83,27 +93,26 @@ def calc_icp(
               tsdf_depth_pyr[2],
               torch.tensor(np.identity(4), dtype=torch.float32).to(cuda_device),
               torch.tensor(k_pyr[2], dtype=torch.float32).to(cuda_device))
-    print("icp l3")
-    print(t10)
+    #print("icp l3")
+    #print(t10)
     t10 = icp(depth_pyr[1].to(torch.float32),
               tsdf_depth_pyr[1],
               t10,
               torch.tensor(k_pyr[1], dtype=torch.float32).to(cuda_device))
-    print("icp l2")
-    print(t10)
+    #print("icp l2")
+    #print(t10)
     t10 = icp(depth_pyr[0].to(torch.float32),
               tsdf_depth_pyr[0],
               t10,
               torch.tensor(k_pyr[0], dtype=torch.float32).to(cuda_device))
-    print("icp l1")
-    print(t10)
+    #print("icp l1")
+    #print(t10)
     # TODO range/instead check for Null?
-    if torch.allclose(t10, torch.eye(4).to(cuda_device), atol=1e-3):  #TODO
+    '''    if torch.allclose(t10, torch.eye(4).to(cuda_device), atol=1e-3):  #TODO
         print("ICP failed or did not improve pose")
     else:
-        c2w = c2w @ t10.cpu().numpy()
-    #torch.cuda.synchronize()  # TODO maybe not necessary
-    #c2w = c2w @ t10.cpu().numpy()
+        c2w = c2w @ t10.cpu().numpy()'''
+    c2w = c2w @ t10.cpu().numpy()
     print("c2w")
     print(c2w)
     return c2w
@@ -126,18 +135,22 @@ def process_frames(depth_stream, color_stream, depth_min, depth_max, k_pyr, widt
         depth_frame_data = depth_frame_data.to(torch.float32).to(cuda_device)
         color_map = torch.frombuffer(color_frame.get_buffer_as_uint8(), dtype=torch.uint8).reshape((height, width, 3))
 
-        # TODO
-        '''depth_map_l1, validity_mask = launch_bilateral_filtering_kernel(
-            depth_frame_data, sigma_spatial, sigma_range, depth_min, depth_max, width, height
-        )'''
+        depth_map_l1, validity_mask = bilateral_filtering(
+            depth_image=depth_frame_data,
+            kernel_size=21,
+            sigma_spatial=sigma_spatial,
+            sigma_range=sigma_range,
+            min_depth=depth_min,
+            max_depth=depth_max
+        )
         depth_map_l2 = block_averaging(
-            depth_frame_data, 2, sigma_range
+            depth_map_l1, 2, sigma_range
         )
         depth_map_l3 = block_averaging(
             depth_map_l2, 2, sigma_range
         )
 
-        depth_map_l1 = depth_frame_data.to(torch.uint16)
+        depth_map_l1 = depth_map_l1.to(torch.uint16)
         depth_map_l2 = depth_map_l2.to(torch.uint16)
         depth_map_l3 = depth_map_l3.to(torch.uint16)
         dep_pyr = [depth_map_l1, depth_map_l2, depth_map_l3]
@@ -148,7 +161,7 @@ def process_frames(depth_stream, color_stream, depth_min, depth_max, k_pyr, widt
         if last_frame is None:
             print("First Frame...")
             print("Computing volume bounds...")
-            volume_bounds = get_vol_bnds(depth_frame_data, k_pyr[0], c2w)
+            volume_bounds = get_vol_bnds(depth_map_l1, k_pyr[0], c2w)
             print("Computing voxel grid...")
             vox_grid = TSDF(vol_dim=volume_bounds, intristics=k_pyr[0])
             print("Voxel grid... Done!")
@@ -156,46 +169,53 @@ def process_frames(depth_stream, color_stream, depth_min, depth_max, k_pyr, widt
             continue
 
 
-        tsdf_dep_pyr, rgb_pyr, vtx_pyr, nrm_pyr, mask_pyr = vox_grid.render_pyramid(
+        '''tsdf_dep_pyr, rgb_pyr, vtx_pyr, nrm_pyr, mask_pyr = vox_grid.render_pyramid(
             c2w=c2w,
             intri=k_pyr[0],
             imh=height,
             imw=width,
             n_pyr=3
-        )
+        )'''
 
-        c2w = calc_icp(dep_pyr, tsdf_dep_pyr, k_pyr, c2w)
+        # TODO change 2nd param
+        c2w = calc_icp(dep_pyr, last_frame[1], k_pyr, c2w)
 
         vox_grid.integrate(current_frame[1][0], c2w, current_frame[0])
 
         iteration += 1
-        if iteration == 50:
+        if iteration == 3:
             get_mesh(vox_grid)
             print("Mesh generation... Done!")
             return
 
-        '''        plt.figure(figsize=(10, 10))
+        plt.figure(figsize=(10, 10))  # Increase figure size for better visibility
 
-        # Plot L1 (Original + Bilateral Filtered Depth Map)
-        plt.subplot(1, 3, 1)
+        # Plot Raw (Original)
+        plt.subplot(2, 2, 1)  # 2x2 grid, first subplot
         plt.imshow(depth_frame_data.cpu().numpy(), cmap='gray')
-        plt.title("Depth Map L1")
+        plt.title("Depth Frame Data", fontsize=14)
+        plt.axis('off')
+
+        # Plot L1 (Bilateral Filtered Depth Map)
+        plt.subplot(2, 2, 2)  # 2x2 grid, second subplot
+        plt.imshow(depth_map_l1.cpu().numpy(), cmap='gray')
+        plt.title("Depth Map L1", fontsize=14)
         plt.axis('off')
 
         # Plot L2 (Subsampled Depth Map)
-        plt.subplot(1, 3, 2)
+        plt.subplot(2, 2, 3)  # 2x2 grid, third subplot
         plt.imshow(depth_map_l2.cpu().numpy(), cmap='gray')
-        plt.title("Depth Map L2")
+        plt.title("Depth Map L2", fontsize=14)
         plt.axis('off')
 
         # Plot L3 (Further Subsampled Depth Map)
-        plt.subplot(1, 3, 3)
+        plt.subplot(2, 2, 4)  # 2x2 grid, fourth subplot
         plt.imshow(depth_map_l3.cpu().numpy(), cmap='gray')
-        plt.title("Depth Map L3")
+        plt.title("Depth Map L3", fontsize=14)
         plt.axis('off')
 
-        # Display the plots
-        plt.show()'''
+        plt.tight_layout()  # Adjust spacing between plots
+        plt.show()
 
         # Reset frames:
         depth_frame = None
@@ -224,8 +244,8 @@ def main():
         print("Using CPU")
         cuda_device = torch.device("cpu")
 
-    sigma_spatial = 10
-    sigma_range = 100
+    sigma_spatial = 40
+    sigma_range = 250
 
     dev, depth_stream, color_stream, depth_min, depth_max, k_pyr, width, height, width_l2, width_l3, height_l2, height_l3 = device_init()
     is_running.set()

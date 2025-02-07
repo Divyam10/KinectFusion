@@ -3,7 +3,7 @@ import torch.nn.functional as F
 
 
 class ICP(torch.nn.Module):
-    def __init__(self, optimizer=None, occlusion_threshold=1000, symmetric_error=False):
+    def __init__(self, optimizer=None, occlusion_threshold=750, symmetric_error=False):
         super().__init__()
         self.optimizer = optimizer
         self.occlusion_threshold = occlusion_threshold
@@ -59,7 +59,9 @@ class ICP(torch.nn.Module):
             out_of_view_pixels = (u_transformed <= 0) | (u_transformed >= W-1) | (v_transformed <= 0) | (v_transformed >= H-1)
             # TODO: Test effects of occlusion mask and estimate how many pixels it is masking on average
             occlusion_mask = diff.norm(p=2, dim=-1) > self.occlusion_threshold
-            valid = occlusion_mask.sum()
+            invalid = occlusion_mask.sum()
+            #print("INVALIIIID: ")
+            #print(invalid)
             mask = mask_source | mask_target | out_of_view_pixels | occlusion_mask
             # print(torch.sum(mask_source), torch.sum(mask_target), torch.sum(out_of_view_pixels), torch.sum(occlusion_mask))
             # print(mask.shape, torch.sum(mask))
