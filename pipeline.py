@@ -13,8 +13,12 @@ from block_averaging_subsampling import block_averaging
 
 is_running = threading.Event()
 cuda_device = None
-optimizer = LM_optimizer(max_iterations=5)
-icp = ICP(optimizer=None, symmetric_error=True)
+optimizer1 = LM_optimizer(max_iterations=6)
+optimizer2 = LM_optimizer(max_iterations=3)
+optimizer3 = LM_optimizer(max_iterations=3)
+icp1 = ICP(optimizer=optimizer1, symmetric_error=True)
+icp2 = ICP(optimizer=optimizer2, symmetric_error=True)
+icp3 = ICP(optimizer=optimizer3, symmetric_error=True)
 
 
 def device_init():
@@ -86,20 +90,20 @@ def calc_icp(
         k_pyr: list,
         c2w: np.ndarray
 ):
-    global icp, cuda_device
-    t10 = icp(depth_pyr[2],
+    global icp1, icp2, icp3, cuda_device
+    t10 = icp3(depth_pyr[2],
               tsdf_depth_pyr[2],
               torch.tensor(np.identity(4), dtype=torch.float32).to(cuda_device),
               torch.tensor(k_pyr[2], dtype=torch.float32).to(cuda_device))
     #print("icp l3")
     #print(t10)
-    t10 = icp(depth_pyr[1],
+    t10 = icp2(depth_pyr[1],
               tsdf_depth_pyr[1],
               t10,
               torch.tensor(k_pyr[1], dtype=torch.float32).to(cuda_device))
     #print("icp l2")
     #print(t10)
-    t10 = icp(depth_pyr[0],
+    t10 = icp1(depth_pyr[0],
               tsdf_depth_pyr[0],
               t10,
               torch.tensor(k_pyr[0], dtype=torch.float32).to(cuda_device))
