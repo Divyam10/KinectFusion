@@ -1,5 +1,3 @@
-import torch
-
 from icp.levenberg_marquardt import LM_optimizer
 from icp.icp import ICP
 from volume_ray_final import *
@@ -89,19 +87,19 @@ def calc_icp(
         c2w: np.ndarray
 ):
     global icp, cuda_device
-    t10 = icp(depth_pyr[2].to(torch.float32),
+    t10 = icp(depth_pyr[2],
               tsdf_depth_pyr[2],
               torch.tensor(np.identity(4), dtype=torch.float32).to(cuda_device),
               torch.tensor(k_pyr[2], dtype=torch.float32).to(cuda_device))
     #print("icp l3")
     #print(t10)
-    t10 = icp(depth_pyr[1].to(torch.float32),
+    t10 = icp(depth_pyr[1],
               tsdf_depth_pyr[1],
               t10,
               torch.tensor(k_pyr[1], dtype=torch.float32).to(cuda_device))
     #print("icp l2")
     #print(t10)
-    t10 = icp(depth_pyr[0].to(torch.float32),
+    t10 = icp(depth_pyr[0],
               tsdf_depth_pyr[0],
               t10,
               torch.tensor(k_pyr[0], dtype=torch.float32).to(cuda_device))
@@ -135,6 +133,9 @@ def process_frames(depth_stream, color_stream, depth_min, depth_max, k_pyr, widt
         depth_frame_data = depth_frame_data.to(torch.float32).to(cuda_device)
         color_map = torch.frombuffer(color_frame.get_buffer_as_uint8(), dtype=torch.uint8).reshape((height, width, 3))
 
+        # TODO ?
+        depth_frame_data[depth_frame_data == 65535] = 0
+
         depth_map_l1, validity_mask = bilateral_filtering(
             depth_image=depth_frame_data,
             kernel_size=21,
@@ -150,18 +151,17 @@ def process_frames(depth_stream, color_stream, depth_min, depth_max, k_pyr, widt
             depth_map_l2, 2, sigma_range
         )
 
-        depth_map_l1 = depth_map_l1.to(torch.uint16)
-        depth_map_l2 = depth_map_l2.to(torch.uint16)
-        depth_map_l3 = depth_map_l3.to(torch.uint16)
         dep_pyr = [depth_map_l1, depth_map_l2, depth_map_l3]
-        # TODO ? depth_frame[depth_frame == 65535] = 0
+
+        # TODO maybe adjust and maybe move
+        dep_pyr = [d / 1000.0 for d in dep_pyr]
 
         current_frame = [color_map, dep_pyr]
 
         if last_frame is None:
             print("First Frame...")
             print("Computing volume bounds...")
-            volume_bounds = get_vol_bnds(depth_map_l1, k_pyr[0], c2w)
+            volume_bounds = get_vol_bnds(dep_pyr[0], k_pyr[0], c2w)
             print("Computing voxel grid...")
             vox_grid = TSDF(vol_dim=volume_bounds, intristics=k_pyr[0])
             print("Voxel grid... Done!")
@@ -245,7 +245,7 @@ def main():
         print("Using CPU")
         cuda_device = torch.device("cpu")
 
-    sigma_spatial = 35
+    sigma_spatial = 30
     sigma_range = 250
 
     dev, depth_stream, color_stream, depth_min, depth_max, k_pyr, width, height, width_l2, width_l3, height_l2, height_l3 = device_init()

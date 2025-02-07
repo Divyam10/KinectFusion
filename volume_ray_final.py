@@ -44,8 +44,8 @@ def get_vol_bnds(depth_im, cam_intr, cam_pose):
 def get_mesh(vox_grid):
     sdf_numpy = vox_grid.sdf_values.cpu().numpy()
     color_sdf = vox_grid.rgb_values.cpu().numpy()
-    #voxel_size = 0.02
-    voxel_size = 20
+    voxel_size = 0.02
+    #voxel_size = 20
 
     verts, faces, norms, vals = measure.marching_cubes(sdf_numpy, level=0)
     verts_ind = np.round(verts).astype(int)
@@ -78,7 +78,7 @@ def get_mesh(vox_grid):
 
 class TSDF():
 
-    def __init__(self, vol_dim, intristics, voxel_size=10):
+    def __init__(self, vol_dim, intristics, voxel_size=0.02):
 
         # self._vol_dim = vol_dim
         self._vol_bnds = vol_dim
@@ -127,7 +127,7 @@ class TSDF():
         self._vol_origin = torch.from_numpy(self._vol_origin).cuda()
         self._voxel_size = torch.asarray(self._voxel_size).cuda()
 
-    def integrate(self, depth_image, camera_pose, color_img, sdf_trunc=30):
+    def integrate(self, depth_image, camera_pose, color_img, sdf_trunc=0.03):
         map_width = 640
         map_height = 480
         with torch.no_grad():
@@ -150,7 +150,7 @@ class TSDF():
             z_coords_valid = self.vox_coords[valid_pix, 2]
 
             z_pix = pts_camera[2, valid_pix]
-            depth_image = depth_image.cuda().to(torch.float32)
+            # depth_image = depth_image.cuda().to(torch.float32)
             color_img = color_img.cuda().to(torch.float32)
             depth_val = depth_image[y_pix[valid_pix], x_pix[valid_pix]]
             rgb_val = color_img[y_pix[valid_pix], x_pix[valid_pix]]
@@ -220,7 +220,7 @@ class TSDF():
             coords_w - self._vol_origin[None, :]) / self._voxel_size
         vox_coord = torch.floor(vox_coord_float)
         vox_offset = vox_coord_float - vox_coord  # [N, 3]
-        vox_coord[vox_offset >= 0.5] += 1. # TODO
+        vox_coord[vox_offset >= 0.5] += 1.
         vox_coord[:, 0] = torch.clamp(
             vox_coord[:, 0], 0., self._vol_dim[0] - 1)
         vox_coord[:, 1] = torch.clamp(
@@ -290,7 +290,7 @@ class TSDF():
         return valid_pts_mask
 
     @torch.no_grad()
-    def render_model(self, c2w, intri, imh, imw, near=500., far=5000., n_samples=192):
+    def render_model(self, c2w, intri, imh, imw, near=0.5, far=5., n_samples=192):
 
         c2w = torch.from_numpy(c2w).float()
         c2w = c2w.to(self.device)
@@ -370,7 +370,7 @@ class TSDF():
 
         return depth_rend, color_rend, vertex_rend, normal_rend, hit_surface_mask
 
-    def render_pyramid(self, c2w, intri, imh, imw, n_pyr=4, near=500., far=5000., n_samples=192):
+    def render_pyramid(self, c2w, intri, imh, imw, n_pyr=4, near=0.5, far=5., n_samples=192):
         K = intri.copy()
         dep_pyr, rgb_pyr, vtx_pyr, nrm_pyr, mask_pyr = [], [], [], [], []
         for l in range(n_pyr):

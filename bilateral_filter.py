@@ -28,6 +28,7 @@ def bilateral_filtering(
     norm_weights = weights.sum(dim=1, keepdim=True)
 
     filtered_values = (weights * patches).sum(dim=1, keepdim=True) / norm_weights
+    filtered_values = filtered_values.round()
     filtered_values = torch.clamp(filtered_values, min_depth, max_depth).squeeze()
 
     vertex_validity_mask = (filtered_values > 0)

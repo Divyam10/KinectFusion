@@ -15,7 +15,7 @@ def block_averaging(depth_image, block_size, sigma_range):
 
     avg_depth = summed / norm.float()
 
-    return avg_depth
+    return avg_depth.round()
 
 
 '''def block_averaging(depth_image, block_size, sigma_range):

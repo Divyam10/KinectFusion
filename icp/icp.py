@@ -3,7 +3,7 @@ import torch.nn.functional as F
 
 
 class ICP(torch.nn.Module):
-    def __init__(self, optimizer=None, occlusion_threshold=750, symmetric_error=False):
+    def __init__(self, optimizer=None, occlusion_threshold=0.1, symmetric_error=False):
         super().__init__()
         self.optimizer = optimizer
         self.occlusion_threshold = occlusion_threshold
