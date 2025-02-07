@@ -166,6 +166,7 @@ def process_frames(depth_stream, color_stream, depth_min, depth_max, k_pyr, widt
             vox_grid = TSDF(vol_dim=volume_bounds, intristics=k_pyr[0])
             print("Voxel grid... Done!")
             last_frame = current_frame
+            vox_grid.integrate(last_frame[1][0], c2w, last_frame[0])
             continue
 
 
@@ -244,7 +245,7 @@ def main():
         print("Using CPU")
         cuda_device = torch.device("cpu")
 
-    sigma_spatial = 40
+    sigma_spatial = 35
     sigma_range = 250
 
     dev, depth_stream, color_stream, depth_min, depth_max, k_pyr, width, height, width_l2, width_l3, height_l2, height_l3 = device_init()
