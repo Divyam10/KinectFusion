@@ -16,7 +16,7 @@ from block_averaging_subsampling import block_averaging
 is_running = threading.Event()
 cuda_device = None
 optimizer = LM_optimizer(max_iterations=5)
-icp = ICP(optimizer=None, occlusion_threshold=1, symmetric_error=True)
+icp = ICP(optimizer=optimizer, occlusion_threshold=1*1000, symmetric_error=True)
 
 
 def device_init():
@@ -98,12 +98,12 @@ def calc_icp(
     print("icp l1")
     print(t10)
     # TODO range/instead check for Null?
-    '''if torch.allclose(t10, torch.eye(4).to(device), atol=1e-3):
+    if torch.allclose(t10, torch.eye(4).to(cuda_device), atol=1e-3):  #TODO
         print("ICP failed or did not improve pose")
     else:
-        c2w = c2w @ t10'''
-    torch.cuda.synchronize()  # TODO maybe not necessary
-    c2w = c2w @ t10.cpu().numpy()
+        c2w = c2w @ t10.cpu().numpy()
+    #torch.cuda.synchronize()  # TODO maybe not necessary
+    #c2w = c2w @ t10.cpu().numpy()
     print("c2w")
     print(c2w)
     return c2w
@@ -117,19 +117,14 @@ def process_frames(depth_stream, color_stream, depth_min, depth_max, k_pyr, widt
     volume_bounds = None
     vox_grid = None
     last_frame = None
-
+    iteration = 0 # TODO remove
     while is_running.is_set():
-        print("Loop iteration\n")
         depth_frame = depth_stream.read_frame()
         color_frame = color_stream.read_frame()
 
-        print("Received frame\n")
-        print("Preprocessing...\n")
-        print("Reshaping")
         depth_frame_data = torch.frombuffer(depth_frame.get_buffer_as_uint16(), dtype=torch.uint16).reshape((height, width))
         depth_frame_data = depth_frame_data.to(torch.float32).to(cuda_device)
         color_map = torch.frombuffer(color_frame.get_buffer_as_uint8(), dtype=torch.uint8).reshape((height, width, 3))
-        print("Reshaping Done")
 
         # TODO
         '''depth_map_l1, validity_mask = launch_bilateral_filtering_kernel(
@@ -141,13 +136,12 @@ def process_frames(depth_stream, color_stream, depth_min, depth_max, k_pyr, widt
         depth_map_l3 = block_averaging(
             depth_map_l2, 2, sigma_range
         )
-        print("Block averaging done")
+
         depth_map_l1 = depth_frame_data.to(torch.uint16)
         depth_map_l2 = depth_map_l2.to(torch.uint16)
         depth_map_l3 = depth_map_l3.to(torch.uint16)
-        print("Conversion to uint16 done")
-
         dep_pyr = [depth_map_l1, depth_map_l2, depth_map_l3]
+
         current_frame = [color_map, dep_pyr]
 
         if last_frame is None:
@@ -155,37 +149,30 @@ def process_frames(depth_stream, color_stream, depth_min, depth_max, k_pyr, widt
             print("Computing volume bounds...")
             volume_bounds = get_vol_bnds(depth_frame_data, k_pyr[0], c2w)
             print("Computing voxel grid...")
-            vox_grid = TSDF(volume_bounds, voxel_size=2, intristics=k_pyr[0])
+            vox_grid = TSDF(vol_dim=volume_bounds, intristics=k_pyr[0])
             print("Voxel grid... Done!")
             last_frame = current_frame
             continue
 
         # TODO ? depth_frame[depth_frame == 65535] = 0
 
-        print("Synthesize model depth frame")
         tsdf_dep_pyr, rgb_pyr, vtx_pyr, nrm_pyr, mask_pyr = vox_grid.render_pyramid(
             c2w=c2w,
             intri=k_pyr[0],
             imh=height,
             imw=width,
-            n_pyr=3,
-            near=0.5,
-            far=5.0
+            n_pyr=3
         )
-        print("Synthesis... Done!")
 
-        print("Calculating ICP...")
-        # TODO change 2nd param to tsdf this:
         c2w = calc_icp(dep_pyr, tsdf_dep_pyr, k_pyr, c2w)
-        print("ICP... Done!")
-        print(c2w)
-        print("Integrate new depth and color into model")
-        # vox_grid.integrate(current_frame[1], c2w, current_frame[0])
-        print("Integration... Done!")
 
-        print("Performing Marching Cubes...")
-        # get_mesh(vox_grid)
-        print("Mesh generation... Done!")
+        vox_grid.integrate(current_frame[1][0], c2w, current_frame[0])
+
+        iteration += 1
+        if iteration == 50:
+            get_mesh(vox_grid)
+            print("Mesh generation... Done!")
+            return
 
         '''        plt.figure(figsize=(10, 10))
 

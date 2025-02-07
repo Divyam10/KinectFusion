@@ -44,7 +44,8 @@ def get_vol_bnds(depth_im, cam_intr, cam_pose):
 def get_mesh(vox_grid):
     sdf_numpy = vox_grid.sdf_values.cpu().numpy()
     color_sdf = vox_grid.rgb_values.cpu().numpy()
-    voxel_size = 0.02
+    #voxel_size = 0.02
+    voxel_size = 20
 
     verts, faces, norms, vals = measure.marching_cubes(sdf_numpy, level=0)
     verts_ind = np.round(verts).astype(int)
@@ -77,7 +78,7 @@ def get_mesh(vox_grid):
 
 class TSDF():
 
-    def __init__(self, vol_dim, intristics, voxel_size=1):
+    def __init__(self, vol_dim, intristics, voxel_size=10):
 
         # self._vol_dim = vol_dim
         self._vol_bnds = vol_dim
@@ -126,13 +127,13 @@ class TSDF():
         self._vol_origin = torch.from_numpy(self._vol_origin).cuda()
         self._voxel_size = torch.asarray(self._voxel_size).cuda()
 
-    def integrate(self, depth_image, camera_pose, color_img, sdf_trunc=0.03):
+    def integrate(self, depth_image, camera_pose, color_img, sdf_trunc=30):
         map_width = 640
         map_height = 480
         with torch.no_grad():
 
             world2cam = torch.inverse(
-                torch.from_numpy(camera_pose)).float().cuda()
+                torch.from_numpy(camera_pose)).float().to(self.device)
             pts_camera = torch.matmul(
                 world2cam, torch.t(self.vox_Wcoords))
             z_points = pts_camera[2]
@@ -149,8 +150,8 @@ class TSDF():
             z_coords_valid = self.vox_coords[valid_pix, 2]
 
             z_pix = pts_camera[2, valid_pix]
-            depth_image = depth_image.cuda()
-            color_img = color_img.cuda()
+            depth_image = depth_image.cuda().to(torch.float32)
+            color_img = color_img.cuda().to(torch.float32)
             depth_val = depth_image[y_pix[valid_pix], x_pix[valid_pix]]
             rgb_val = color_img[y_pix[valid_pix], x_pix[valid_pix]]
 
@@ -204,7 +205,7 @@ class TSDF():
         n = torch.norm(norms, dim=-1)
         outliers_mask = n > 1. / (2 * self._voxel_size)
         norms[outliers_mask] = 0.
-        eps = 1e-7
+        eps = 1e-7 # TODO?
         non_zero_grad = n > eps
         norms[non_zero_grad, :] = norms[non_zero_grad, :] / \
             n[non_zero_grad][:, None]
@@ -219,7 +220,7 @@ class TSDF():
             coords_w - self._vol_origin[None, :]) / self._voxel_size
         vox_coord = torch.floor(vox_coord_float)
         vox_offset = vox_coord_float - vox_coord  # [N, 3]
-        vox_coord[vox_offset >= 0.5] += 1.
+        vox_coord[vox_offset >= 0.5] += 1. # TODO
         vox_coord[:, 0] = torch.clamp(
             vox_coord[:, 0], 0., self._vol_dim[0] - 1)
         vox_coord[:, 1] = torch.clamp(
@@ -323,7 +324,7 @@ class TSDF():
         norms = self.get_normals()
         surf_tsdf = self.tril_interp(self.sdf_values, hit_pts)  # [n_surf_pts]
         surf_norms = self.get_nn(norms, hit_pts)
-        updated_hit_pts = hit_pts - surf_tsdf[:, None] * 0.03 * surf_norms
+        updated_hit_pts = hit_pts - surf_tsdf[:, None] * 0.03 * surf_norms # TODO
         valid_mask = self.get_pts_inside(updated_hit_pts)
         hit_pts[valid_mask, :] = updated_hit_pts[valid_mask, :]
 
@@ -373,7 +374,7 @@ class TSDF():
         K = intri.copy()
         dep_pyr, rgb_pyr, vtx_pyr, nrm_pyr, mask_pyr = [], [], [], [], []
         for l in range(n_pyr):
-            dep, rgb, feat, vtx, nrm, mask = self.render_model(
+            dep, rgb, vtx, nrm, mask = self.render_model(
                 c2w, K, imh, imw, near=near, far=far, n_samples=n_samples)
             dep_pyr += [dep]
             rgb_pyr += [rgb]
