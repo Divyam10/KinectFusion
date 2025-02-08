@@ -1,5 +1,12 @@
+import random
 import sys
 import numpy as np
+from skimage import measure
+from scipy.interpolate import RegularGridInterpolator
+
+import OpenGL.GL as gl
+from OpenGL import GLU
+from OpenGL.arrays import vbo
 
 from PyQt5.QtCore import *
 from PyQt5.QtGui import *
@@ -7,18 +14,171 @@ from PyQt5.QtWidgets import *
 
 from sensor import SensorWorker
 
+
+class MeshWidget(QOpenGLWidget):
+    def __init__(self, parent=None):
+        super(MeshWidget, self).__init__(parent)
+        self.vox_grid = None
+        self.setFixedSize(600, 600)
+
+        self.rotX = 0.0
+        self.rotY = 0.0
+        self.rotZ = 0.0
+
+        self.verts = []
+        self.faces = []
+        self.vertex_colors = []
+        self.normals = []
+
+        self.color_mode = False
+        self.vertVBO = None
+        self.colorVBO = None
+
+    def initializeGL(self):
+        gl.glClearColor(0.2, 0.2, 0.2, 1.0)
+        gl.glEnable(gl.GL_DEPTH_TEST)
+        self.vertVBO = vbo.VBO(np.array([], dtype=np.float32))
+        self.colorVBO = vbo.VBO(np.array([], dtype=np.float32))
+        self.vertVBO.bind()
+        self.colorVBO.bind()
+
+    def resizeGL(self, width, height):
+        gl.glViewport(0, 0, width, height)
+        gl.glMatrixMode(gl.GL_PROJECTION)
+        gl.glLoadIdentity()
+        aspect = width / float(height)
+
+        GLU.gluPerspective(45.0, aspect, 0.1, 10.0)
+        gl.glMatrixMode(gl.GL_MODELVIEW)
+
+
+    def paintGL(self):
+        gl.glClear(gl.GL_COLOR_BUFFER_BIT | gl.GL_DEPTH_BUFFER_BIT)
+
+        self.get_mesh()
+        gl.glPushMatrix()  # push the current matrix to the current stack
+
+        gl.glTranslate(0.0, 0.0, -5.0)  # third, translate cube to specified depth
+        gl.glScale(2.0, 2.0, 2.0)  # second, scale cube
+        gl.glRotate(self.rotX, 1.0, 0.0, 0.0)
+        gl.glRotate(self.rotY, 0.0, 1.0, 0.0)
+        gl.glRotate(self.rotZ, 0.0, 0.0, 1.0)
+
+        gl.glEnableClientState(gl.GL_VERTEX_ARRAY)
+        gl.glEnableClientState(gl.GL_COLOR_ARRAY)
+
+        self.vertVBO.bind()
+        gl.glVertexPointer(3, gl.GL_FLOAT, 0, self.vertVBO)
+        self.colorVBO.bind()
+        gl.glColorPointer(3, gl.GL_FLOAT, 0, self.colorVBO)
+
+        gl.glDrawElements(gl.GL_TRIANGLES, len(self.faces)*3, gl.GL_UNSIGNED_INT, self.faces)
+
+        gl.glDisableClientState(gl.GL_VERTEX_ARRAY)
+        gl.glDisableClientState(gl.GL_COLOR_ARRAY)
+
+        gl.glPopMatrix()  # restore the previous modelview matrix
+
+    def write_mesh_file(self):
+        filename = "reconstruction.off"
+        with open(filename, 'w') as f:
+            if self.color_mode:
+                f.write("COFF\n")
+            else:
+                f.write("OFF\n")
+            f.write(f"{len(self.verts)} {len(self.faces)} 0\n")
+
+            for i, v in enumerate(self.verts):
+                vertex_str = f"{v[0]} {v[1]} {v[2]}"
+                if self.color_mode:
+                    color_int = (self.vertex_colors[i] * 255).astype(int)
+                    color_str = ' '.join(map(str, color_int))
+                    f.write(f"{vertex_str} {color_str}\n")
+                else:
+                    f.write(f"{vertex_str}\n")
+
+            for face in self.faces:
+                f.write(f"{len(face)} {' '.join(map(str, face))}\n")
+
+    def get_mesh(self):
+        if self.vox_grid is not None:
+            print("generating new mesh...")
+            sdf_numpy = self.vox_grid.sdf_values.cpu().numpy()
+            color_sdf = self.vox_grid.rgb_values.cpu().numpy()
+            voxel_size = 0.02
+            # voxel_size = 20
+
+            verts, faces, norms, vals = measure.marching_cubes(sdf_numpy, level=0)
+            verts_ind = np.round(verts).astype(int)
+            self.verts = verts * voxel_size
+            self.faces = faces
+
+            # TODO this crashes regularly
+            #y = np.arange(color_sdf.shape[1]) * voxel_size
+            #x = np.arange(color_sdf.shape[0]) * voxel_size
+            #z = np.arange(color_sdf.shape[2]) * voxel_size
+
+            #r_interpolator = RegularGridInterpolator((x, y, z), color_sdf[..., 0])
+            #g_interpolator = RegularGridInterpolator((x, y, z), color_sdf[..., 1])
+            #b_interpolator = RegularGridInterpolator((x, y, z), color_sdf[..., 2])
+
+            #r_values = r_interpolator(verts)
+            #g_values = g_interpolator(verts)
+            #b_values = b_interpolator(verts)
+
+            #self.vertex_colors = np.stack((b_values, g_values, r_values), axis=-1)
+            default_color = np.array([0.5, 0.5, 1.0])  # RGB color for blue
+
+            # Set all vertex colors to the default color
+            self.vertex_colors = np.tile(default_color, (self.verts.shape[0], 1))
+
+            min_bound = np.min(self.verts, axis=0)
+            max_bound = np.max(self.verts, axis=0)
+            center = (min_bound + max_bound) / 2.0
+            self.verts -= center  # Shift mesh to origin
+
+            # Scale mesh to fit within [-1, 1] range
+            max_extent = np.max(max_bound - min_bound)
+            self.verts /= max_extent  # Normalize size
+
+            self.vertVBO.set_array(np.reshape(self.verts,(1, -1)).astype(np.float32))
+            self.colorVBO.set_array(np.reshape(self.vertex_colors,(1, -1)).astype(np.float32))
+
+
+    def update_grid(self, new_vox_grid):
+        # Update voxel grid
+        self.vox_grid = new_vox_grid
+        self.update()
+
+
 class MainWindow(QMainWindow):
     def __init__(self, parent=None):
         super(MainWindow, self).__init__(parent)
-        self.setWindowTitle("Kinect Fusion")
         self.sensor = SensorWorker()
-        central_widget = QWidget()
-        self.mesh_panel = QLabel()
+        self.mesh_panel = MeshWidget()
         self.color_panel = QLabel()
         self.depth_panel = QLabel()
+
+        self.setup_gui()
+
+        self.sensor.new_frame.connect(self.get_img_from_frame)
+        self.sensor.new_grid.connect(self.mesh_panel.update_grid)
+
+        self.sensor.start()
+
+    def setup_gui(self):
+        self.setWindowTitle("Kinect Fusion")
+        central_widget = QWidget()
+        reset_btn = QPushButton("Reset")
+        save_btn = QPushButton("Save Mesh")
+        buttonLayout = QHBoxLayout()
+        buttonLayout.addWidget(reset_btn)
+        buttonLayout.addWidget(save_btn)
+
         input_layout = QVBoxLayout()
         input_layout.addWidget(self.color_panel)
         input_layout.addWidget(self.depth_panel)
+        input_layout.addLayout(buttonLayout)
 
         main_layout = QHBoxLayout()
         main_layout.addWidget(self.mesh_panel)
@@ -27,9 +187,11 @@ class MainWindow(QMainWindow):
         central_widget.setLayout(main_layout)
         self.setCentralWidget(central_widget)
 
-        self.sensor.new_frame.connect(self.get_img_from_frame)
+        reset_btn.clicked.connect(self.reset)
+        save_btn.clicked.connect(self.mesh_panel.write_mesh_file)
 
-        self.sensor.start()
+    def reset(self):
+        self.sensor.reset()
 
     def get_img_from_frame(self, frame):
         color_map = frame[0].cpu().numpy()

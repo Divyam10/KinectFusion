@@ -10,12 +10,14 @@ from block_averaging_subsampling import block_averaging
 
 class SensorWorker(QThread):
     new_frame = pyqtSignal(object)
+    new_grid = pyqtSignal(object)
 
     def __init__(self):
         super().__init__()
         #self.is_running = threading.Event()
         self.is_running = True
         self.cuda_device = None
+        self.counter = 1
 
         if torch.cuda.is_available():
             print("Using CUDA")
@@ -109,6 +111,10 @@ class SensorWorker(QThread):
         while self.is_running:
             self.process_frame()
             self.new_frame.emit(self.current_frame)
+            if self.counter == 0:  # only update mesh every tenth frame?
+                self.new_grid.emit(self.vox_grid)
+                #self.counter = 0
+            self.counter = (self.counter + 1) % 10
 
     def stop(self):
         self.is_running = False
@@ -166,46 +172,40 @@ class SensorWorker(QThread):
 
         return dep_pyr
 
-    def process_frame(self):
+    def reset(self):
+        # TODO: more logic for resetting reconstruction?
+        self.last_frame = None
+        print("reset reconstruction")
+
+    def read_frame(self):
         depth_frame = self.depth_stream.read_frame()
         color_frame = self.color_stream.read_frame()
 
         depth_frame_data = torch.frombuffer(depth_frame.get_buffer_as_uint16(), dtype=torch.uint16).reshape(
             (self.height, self.width))
         depth_frame_data = depth_frame_data.to(torch.float32).to(self.cuda_device)
-        color_map = torch.frombuffer(color_frame.get_buffer_as_uint8(), dtype=torch.uint8).reshape((self.height, self.width, 3))
+        color_frame_data = torch.frombuffer(color_frame.get_buffer_as_uint8(), dtype=torch.uint8).reshape(
+            (self.height, self.width, 3))
 
         # TODO ?
         depth_frame_data[depth_frame_data == 65535] = 0
+        return color_frame_data, depth_frame_data
 
-        dep_pyr = self.create_depth_pyramid(depth_frame_data)
+    def process_frame(self):
+        color_map, depth_map = self.read_frame()
+        dep_pyr = self.create_depth_pyramid(depth_map)
 
         self.current_frame = [color_map, dep_pyr]
 
         if self.last_frame is None:
-            #print("First Frame...")
-            #print("Computing volume bounds...")
             volume_bounds = get_vol_bnds(dep_pyr[0], self.k_pyr[0], self.c2w)
-            #print("Computing voxel grid...")
-            vox_grid = TSDF(vol_dim=volume_bounds, intristics=self.k_pyr[0])
-            #print("Voxel grid... Done!")
-            last_frame = self.current_frame
-            vox_grid.integrate(last_frame[1][0], self.c2w, last_frame[0])
+            self.vox_grid = TSDF(vol_dim=volume_bounds, intristics=self.k_pyr[0])
+            self.last_frame = self.current_frame
+            self.vox_grid.integrate(self.last_frame[1][0], self.c2w, self.last_frame[0])
+            print(self.vox_grid)
             return
-
-        '''tsdf_dep_pyr, rgb_pyr, vtx_pyr, nrm_pyr, mask_pyr = vox_grid.render_pyramid(
-            c2w=c2w,
-            intri=k_pyr[0],
-            imh=height,
-            imw=width,
-            n_pyr=3
-        )'''
 
         # TODO change 2nd param
         self.calc_icp(dep_pyr, self.last_frame[1])
-
-        self.vox_grid.integrate(self.current_frame[1][0], self.c2w, self.current_frame[0])
-
-        #get_mesh(self.vox_grid)
-        #print("Mesh generation... Done!")
+        #self.vox_grid.integrate(self.current_frame[1][0], self.c2w, self.current_frame[0])
 
