@@ -84,18 +84,18 @@ class TSDF():
         self._vol_bnds = vol_dim
         self._voxel_size = voxel_size
         self.device = "cuda:0"
-        print(self._vol_bnds)
+        #print(self._vol_bnds)
         self._vol_dim = np.ceil(
             (self._vol_bnds[:, 1]-self._vol_bnds[:, 0])/self._voxel_size).copy(order='C').astype(int)
         self._vol_bnds[:, 1] = self._vol_bnds[:, 0] + \
             self._vol_dim*self._voxel_size
         self._vol_origin = self._vol_bnds[:, 0].copy(
             order='C').astype(np.float32)
-        print(self._vol_origin)
-        print("Voxel volume size: {} x {} x {} - # points: {:,}".format(
-            self._vol_dim[0], self._vol_dim[1], self._vol_dim[2],
-            self._vol_dim[0]*self._vol_dim[1]*self._vol_dim[2])
-        )
+        #print(self._vol_origin)
+        #print("Voxel volume size: {} x {} x {} - # points: {:,}".format(
+        #    self._vol_dim[0], self._vol_dim[1], self._vol_dim[2],
+        #    self._vol_dim[0]*self._vol_dim[1]*self._vol_dim[2])
+        #)
 
         self.fx = intristics[0][0]
         self.fy = intristics[1][1]
@@ -185,7 +185,7 @@ class TSDF():
             self.weights[x_points_valid, y_points_valid,
                          z_points_valid] = self.weights[x_points_valid, y_points_valid, z_points_valid] + 1
 
-            print("integrate", self.sdf_values.min())
+            # print("integrate", self.sdf_values.min())
             torch.cuda.empty_cache()
 
             return 0
