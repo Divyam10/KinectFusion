@@ -21,7 +21,7 @@ class MeshWidget(QOpenGLWidget):
         self.vox_grid = None
         self.setFixedSize(600, 600)
 
-        self.rotX = 0.0
+        self.rotX = 30.0
         self.rotY = 0.0
         self.rotZ = 0.0
 
@@ -33,14 +33,14 @@ class MeshWidget(QOpenGLWidget):
         self.color_mode = False
         self.vertVBO = None
         self.colorVBO = None
+        self.normalVBO = None
 
     def initializeGL(self):
         gl.glClearColor(0.2, 0.2, 0.2, 1.0)
-        gl.glEnable(gl.GL_DEPTH_TEST)
+
         self.vertVBO = vbo.VBO(np.array([], dtype=np.float32))
         self.colorVBO = vbo.VBO(np.array([], dtype=np.float32))
-        self.vertVBO.bind()
-        self.colorVBO.bind()
+        self.normalVBO = vbo.VBO(np.array([], dtype=np.float32))
 
     def resizeGL(self, width, height):
         gl.glViewport(0, 0, width, height)
@@ -55,29 +55,41 @@ class MeshWidget(QOpenGLWidget):
     def paintGL(self):
         gl.glClear(gl.GL_COLOR_BUFFER_BIT | gl.GL_DEPTH_BUFFER_BIT)
 
+        gl.glEnable(gl.GL_DEPTH_TEST)
+        gl.glEnable(gl.GL_LIGHTING)
+        gl.glEnable(gl.GL_LIGHT0)
+        gl.glLightfv(gl.GL_LIGHT0, gl.GL_POSITION, [2., 2., -10., 0.])
+        gl.glLightfv(gl.GL_LIGHT0, gl.GL_DIFFUSE, [1.0, 1.0, 1.0])
+        gl.glLightModelfv(gl.GL_LIGHT_MODEL_AMBIENT, [0.2, 0.2, 0.2, 1.0])
+
+        gl.glShadeModel(gl.GL_SMOOTH)
+
         self.get_mesh()
         gl.glPushMatrix()  # push the current matrix to the current stack
 
         gl.glTranslate(0.0, 0.0, -5.0)  # third, translate cube to specified depth
-        gl.glScale(2.0, 2.0, 2.0)  # second, scale cube
+        gl.glScale(3.0, -3.0, 3.0)  # second, scale cube
         gl.glRotate(self.rotX, 1.0, 0.0, 0.0)
         gl.glRotate(self.rotY, 0.0, 1.0, 0.0)
         gl.glRotate(self.rotZ, 0.0, 0.0, 1.0)
 
         gl.glEnableClientState(gl.GL_VERTEX_ARRAY)
         gl.glEnableClientState(gl.GL_COLOR_ARRAY)
+        gl.glEnableClientState(gl.GL_NORMAL_ARRAY)
 
         self.vertVBO.bind()
         gl.glVertexPointer(3, gl.GL_FLOAT, 0, self.vertVBO)
         self.colorVBO.bind()
         gl.glColorPointer(3, gl.GL_FLOAT, 0, self.colorVBO)
+        self.normalVBO.bind()
+        gl.glNormalPointer(gl.GL_FLOAT, 0, self.normalVBO)
 
         gl.glDrawElements(gl.GL_TRIANGLES, len(self.faces)*3, gl.GL_UNSIGNED_INT, self.faces)
 
         gl.glDisableClientState(gl.GL_VERTEX_ARRAY)
         gl.glDisableClientState(gl.GL_COLOR_ARRAY)
 
-        gl.glPopMatrix()  # restore the previous modelview matrix
+        gl.glPopMatrix()
 
     def write_mesh_file(self):
         filename = "reconstruction.off"
@@ -143,6 +155,7 @@ class MeshWidget(QOpenGLWidget):
 
             self.vertVBO.set_array(np.reshape(self.verts,(1, -1)).astype(np.float32))
             self.colorVBO.set_array(np.reshape(self.vertex_colors,(1, -1)).astype(np.float32))
+            self.normalVBO.set_array(np.reshape(norms,(1, -1)).astype(np.float32))
 
 
     def update_grid(self, new_vox_grid):

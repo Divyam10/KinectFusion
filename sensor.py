@@ -207,5 +207,5 @@ class SensorWorker(QThread):
 
         # TODO change 2nd param
         self.calc_icp(dep_pyr, self.last_frame[1])
-        #self.vox_grid.integrate(self.current_frame[1][0], self.c2w, self.current_frame[0])
+        self.vox_grid.integrate(self.current_frame[1][0], self.c2w, self.current_frame[0])
 
