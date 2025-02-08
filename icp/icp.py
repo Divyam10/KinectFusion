@@ -60,8 +60,7 @@ class ICP(torch.nn.Module):
             # TODO: Test effects of occlusion mask and estimate how many pixels it is masking on average
             occlusion_mask = diff.norm(p=2, dim=-1) > self.occlusion_threshold
             mask = mask_source | mask_target | out_of_view_pixels | occlusion_mask
-            print(torch.sum(mask_source), torch.sum(mask_target), torch.sum(out_of_view_pixels), torch.sum(occlusion_mask))
-            print(mask.shape, torch.sum(mask))
+            print("Masks", torch.sum(mask_source), torch.sum(mask_target), torch.sum(out_of_view_pixels), torch.sum(occlusion_mask))
 
             # Perform linear least squares if no optimizer provided
             if self.optimizer is None:
@@ -112,7 +111,7 @@ class ICP(torch.nn.Module):
         device = depth_map.device
         fx, fy, cx, cy = K[0, 0], K[1, 1], K[0, 2], K[1, 2]
 
-        pixel_grid_v, pixel_grid_u = torch.meshgrid([torch.arange(0, W), torch.arange(0, H)], indexing="xy")
+        pixel_grid_v, pixel_grid_u = torch.meshgrid([torch.arange(0, H), torch.arange(0, W)], indexing="ij")
         pixel_grid_u = pixel_grid_u.to(device)
         pixel_grid_v = pixel_grid_v.to(device)
 

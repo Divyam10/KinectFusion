@@ -201,19 +201,18 @@ optimizer = LM_optimizer(max_iterations=10)
 icp = ICP(optimizer=None, occlusion_threshold=0.1, symmetric_error=True)
 
 icp_solvers = [
-    ICP(optimizer=LM_optimizer(max_iterations=6, damping_factor=1.0e-3), occlusion_threshold=0.1, symmetric_error=True),
-    ICP(optimizer=LM_optimizer(max_iterations=3, damping_factor=1.0e-3), occlusion_threshold=0.1, symmetric_error=True),
-    ICP(optimizer=LM_optimizer(max_iterations=3, damping_factor=1.0e-3), occlusion_threshold=0.1, symmetric_error=True)
+    ICP(optimizer=LM_optimizer(max_iterations=6, damping_factor=1.0e-4), occlusion_threshold=0.1, symmetric_error=False),
+    ICP(optimizer=LM_optimizer(max_iterations=3, damping_factor=1.0e-4), occlusion_threshold=0.1, symmetric_error=False),
+    ICP(optimizer=LM_optimizer(max_iterations=3, damping_factor=1.0e-2), occlusion_threshold=0.1, symmetric_error=False)
 ]
 
 multiscales = [torch.nn.MaxPool2d(1<<i, 1<<i) for i in range(num_scales)]
 
 start = 0
-end = 20
+end = 5
 print(len(data))
 
 depth, rgb, c2w = read_data(data, start)
-c2w = torch.eye(4).to(device)
 H, W = depth.shape
 
 volume_bounds = tsdf.get_vol_bnds(depth, K.cpu().numpy(), c2w.cpu().numpy())
@@ -238,10 +237,9 @@ for i in range(start+1, min(len(data), end+1)):
     depth1, color1, vertex01, normal1, mask1 = vox_grid.render_model(c2w.cpu().numpy(), K, H, W, near=d_min,
                                                                         far=d_max, n_samples=192)
 
-    print(depth1.dtype, depth_curr.dtype)
     dpt_curr_pyr = [f(depth_curr.view(1, 1, H, W)) for f in multiscales]
     dpt_curr_pyr = [d.squeeze() for d in dpt_curr_pyr]
-    dpt1_pyr = [f(depth_curr.view(1, 1, H, W)) for f in multiscales]
+    dpt1_pyr = [f(depth1.view(1, 1, H, W)) for f in multiscales]
     dpt1_pyr = [d.squeeze() for d in dpt1_pyr]
 
     T10 = torch.eye(4).to(device)
