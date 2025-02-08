@@ -9,6 +9,8 @@ import open3d as o3d
 from icp.levenberg_marquardt import LM_optimizer
 from icp.icp import ICP
 
+import volume_ray_final as tsdf
+
 
 DATA_DIR = 'data/rgbd_dataset_freiburg1_desk'
 DATA_PATH = os.path.join(os.getcwd(), DATA_DIR)
@@ -28,6 +30,8 @@ else:
 # define allowed range of depth values in meters
 d_max = 5
 d_min = 0.25
+
+num_scales = 3
 
 fx, fy, cx, cy = 517.3, 516.5, 318.6, 255.3
 K = torch.tensor([[fx, 0, cx], [0, fy, cy], [0, 0, 1]]).to(device)
@@ -193,11 +197,29 @@ def plot_3d_figure(point_cloud, normals, colors_np):
 
 
 data = prepare_data(depth_file, rgb_file, trajectory_file)
-optimizer = LM_optimizer(max_iterations=5)
+optimizer = LM_optimizer(max_iterations=10)
 icp = ICP(optimizer=None, occlusion_threshold=0.1, symmetric_error=True)
 
-depth, rgb, c2w = read_data(data, 0)
+icp_solvers = [
+    ICP(optimizer=LM_optimizer(max_iterations=6, damping_factor=1.0e-3), occlusion_threshold=0.1, symmetric_error=True),
+    ICP(optimizer=LM_optimizer(max_iterations=3, damping_factor=1.0e-3), occlusion_threshold=0.1, symmetric_error=True),
+    ICP(optimizer=LM_optimizer(max_iterations=3, damping_factor=1.0e-3), occlusion_threshold=0.1, symmetric_error=True)
+]
+
+multiscales = [torch.nn.MaxPool2d(1<<i, 1<<i) for i in range(num_scales)]
+
+start = 0
+end = 20
+print(len(data))
+
+depth, rgb, c2w = read_data(data, start)
+c2w = torch.eye(4).to(device)
 H, W = depth.shape
+
+volume_bounds = tsdf.get_vol_bnds(depth, K.cpu().numpy(), c2w.cpu().numpy())
+vox_grid = tsdf.TSDF(vol_dim=volume_bounds, intristics=K, device=device)
+
+vox_grid.integrate(depth, c2w.cpu().numpy(), rgb)
 
 vertices = ICP.compute_vertices(depth, K)
 normals = ICP.compute_normals(vertices)
@@ -209,53 +231,78 @@ vertices = torch.matmul(vertices, R.T) + t
 pcd = plot_3d_figure(vertices, normals, colors)
 
 time_list, c2w_list, c2w_gt_list = list(), list(), list()
-for i in range(1, len(data[:50])):
-    depth1, rgb1, c2w1 = read_data(data, i)
+for i in range(start+1, min(len(data), end+1)):
+    depth_curr, rgb_curr, c2w_curr = read_data(data, i)
     t0 = get_time()
 
-    T10 = icp(depth1, depth, torch.eye(4).to(device), K)
+    depth1, color1, vertex01, normal1, mask1 = vox_grid.render_model(c2w.cpu().numpy(), K, H, W, near=d_min,
+                                                                        far=d_max, n_samples=192)
+
+    print(depth1.dtype, depth_curr.dtype)
+    dpt_curr_pyr = [f(depth_curr.view(1, 1, H, W)) for f in multiscales]
+    dpt_curr_pyr = [d.squeeze() for d in dpt_curr_pyr]
+    dpt1_pyr = [f(depth_curr.view(1, 1, H, W)) for f in multiscales]
+    dpt1_pyr = [d.squeeze() for d in dpt1_pyr]
+
+    T10 = torch.eye(4).to(device)
+    for j in reversed(range(num_scales)):
+        K_scaled = K.clone()
+        if j!= 0:
+            K_scaled[0, 0] /= 2 ** j
+            K_scaled[1, 1] /= 2 ** j
+            K_scaled[0, 2] /= 2 ** j
+            K_scaled[1, 2] /= 2 ** j
+
+        T10 = icp_solvers[j](dpt_curr_pyr[j], dpt1_pyr[j], T10, K_scaled)
+        # print("T10 -", j)
+        # print(T10)
 
     c2w = c2w @ T10
+
+    vox_grid.integrate(depth_curr, c2w.cpu().numpy(), rgb_curr)
 
     t1 = get_time()
     time_list += [t1 - t0]
     print("processed frame: {:d}, time taken: {:f}s".format(i, t1 - t0))
 
-    depth = depth1
-
     c2w_list += [c2w.cpu().numpy()]
-    c2w_gt_list += [c2w1.cpu().numpy()]
+    c2w_gt_list += [c2w_curr.cpu().numpy()]
+    print(c2w_gt_list[-1])
+    print(c2w_list[-1])
 
 avg_time = np.array(time_list).mean()
 print("average processing time: {:f}s per frame, i.e. {:f} fps".format(avg_time, 1. / avg_time))
+
+tsdf.get_mesh(vox_grid)
+print("Mesh generation... Done!")
 
 c2w_gt_list = np.stack(c2w_gt_list, 0)
 c2w_list = np.stack(c2w_list, 0)
 traj_gt = np.array(c2w_gt_list)[:, :3, 3]
 traj = np.array(c2w_list)[:, :3, 3]
-print(c2w_gt_list[-1])
-print(c2w_list[-1])
-plt.figure(figsize=(10, 6))
-plt.plot(traj_gt[:, 0], traj_gt[:, 1], label="Ground Truth", color="blue")
-plt.plot(traj[:, 0], traj[:, 1], label="Estimated", color="red", linestyle="--")
-plt.legend()
-plt.title("Trajectory Comparison")
-plt.xlabel("X")
-plt.ylabel("Y")
-plt.grid()
-plt.show()
-
+# print(c2w_gt_list[-1])
+# print(c2w_list[-1])
+# plt.figure(figsize=(10, 6))
+# plt.plot(traj_gt[:, 0], traj_gt[:, 1], label="Ground Truth", color="blue")
+# plt.plot(traj[:, 0], traj[:, 1], label="Estimated", color="red", linestyle="--")
+# plt.legend()
+# plt.title("Trajectory Comparison")
+# plt.xlabel("X")
+# plt.ylabel("Y")
+# plt.grid()
+# plt.show()
+#
 rmse = np.sqrt(np.mean(np.linalg.norm(traj_gt - traj, axis=-1) ** 2))
 print("RMSE: {:f}".format(rmse))
-
-
-vertices1 = ICP.compute_vertices(depth1, K)
-normals1 = ICP.compute_normals(vertices1)
-colors1 = np.array([0, 0, 1]).reshape(1, 3).repeat(H*W, axis=0)
-
-R = c2w[:3, :3]
-t = c2w[:3, -1]
-vertices1 = torch.matmul(vertices1, R.T) + t
-pcd1 = plot_3d_figure(vertices1, normals1, colors1)
-
-o3d.visualization.draw_geometries([pcd, pcd1], point_show_normal=False)
+#
+#
+# vertices1 = ICP.compute_vertices(depth1, K)
+# normals1 = ICP.compute_normals(vertices1)
+# colors1 = np.array([0, 0, 1]).reshape(1, 3).repeat(H*W, axis=0)
+#
+# R = c2w[:3, :3]
+# t = c2w[:3, -1]
+# vertices1 = torch.matmul(vertices1, R.T) + t
+# pcd1 = plot_3d_figure(vertices1, normals1, colors1)
+#
+# o3d.visualization.draw_geometries([pcd, pcd1], point_show_normal=False)
