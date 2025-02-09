@@ -45,8 +45,8 @@ class SensorWorker(QThread):
         self.height_l3 = self.height_l2 // 2
         self.width_l3 = self.width_l2 // 2
         fps = 30
-
-        openni2.initialize()  # can also accept the path of the OpenNI redistribution
+        dist = "/home/zeus/Install/kinect/openni2/OpenNI2/Packaging/OpenNI2-x64/Redist/"
+        openni2.initialize(dist)  # can also accept the path of the OpenNI redistribution
 
         self.dev = openni2.Device.open_any()
         self.dev.set_depth_color_sync_enabled(True)
@@ -56,8 +56,8 @@ class SensorWorker(QThread):
 
         self.depth_stream.configure_mode(self.width, self.height, fps, openni2.PIXEL_FORMAT_DEPTH_1_MM)
         # TODO kinect crash if this line is used
-        # self.color_stream.configure_mode(self.width, height, fps, openni2.PIXEL_FORMAT_RGB888)
-
+    # depth_stream.configure_mode(width, height, fps, openni2.PIXEL_FORMAT_DEPTH_1_MM)
+        self.color_stream.configure_mode(self.width, self.height, fps, openni2.PIXEL_FORMAT_RGB888)
         self.depth_stream.start()
         self.color_stream.start()
 
@@ -103,6 +103,9 @@ class SensorWorker(QThread):
         self.k_pyr = [self.k1, self.k2, self.k3]
 
         self.c2w = np.eye(4)
+        self.c2w[0, 3] = -0.25  # -0.25
+        self.c2w[1, 3] = 1.0  # 1.0
+        self.c2w[2, 3] = -0.1 
         self.volume_bounds = None
         self.vox_grid = None
         self.last_frame = None
@@ -128,19 +131,19 @@ class SensorWorker(QThread):
         openni2.unload()
 
     def calc_icp(self, depth_pyr, tsdf_depth_pyr):
-        t10 = self.icp3(depth_pyr[2],
+        t10, _ = self.icp3(depth_pyr[2],
                    tsdf_depth_pyr[2],
                    torch.tensor(np.identity(4), dtype=torch.float32).to(self.cuda_device),
                    torch.tensor(self.k_pyr[2], dtype=torch.float32).to(self.cuda_device))
         # print("icp l3")
         # print(t10)
-        t10 = self.icp2(depth_pyr[1],
+        t10, _ = self.icp2(depth_pyr[1],
                    tsdf_depth_pyr[1],
                    t10,
                    torch.tensor(self.k_pyr[1], dtype=torch.float32).to(self.cuda_device))
         # print("icp l2")
         # print(t10)
-        t10 = self.icp1(depth_pyr[0],
+        t10, _ = self.icp1(depth_pyr[0],
                    tsdf_depth_pyr[0],
                    t10,
                    torch.tensor(self.k_pyr[0], dtype=torch.float32).to(self.cuda_device))
@@ -185,10 +188,10 @@ class SensorWorker(QThread):
         depth_frame = self.depth_stream.read_frame()
         color_frame = self.color_stream.read_frame()
 
-        depth_frame_data = torch.frombuffer(depth_frame.get_buffer_as_uint16(), dtype=torch.uint16).reshape(
+        depth_frame_data = torch.frombuffer(depth_frame.get_buffer_as_uint16(), dtype=torch.int16).reshape(
             (self.height, self.width))
         depth_frame_data = depth_frame_data.to(torch.float32).to(self.cuda_device)
-        color_frame_data = torch.frombuffer(color_frame.get_buffer_as_uint8(), dtype=torch.uint8).reshape(
+        color_frame_data = torch.frombuffer(color_frame.get_buffer_as_uint8(), dtype=torch.int8).reshape(
             (self.height, self.width, 3))
 
         # TODO ?
