@@ -55,6 +55,7 @@ class SensorWorker(QThread):
         self.color_stream = self.dev.create_color_stream()
 
         self.depth_stream.configure_mode(self.width, self.height, fps, openni2.PIXEL_FORMAT_DEPTH_1_MM)
+        # TODO kinect crash if this line is used
         # self.color_stream.configure_mode(self.width, height, fps, openni2.PIXEL_FORMAT_RGB888)
 
         self.depth_stream.start()
@@ -62,8 +63,9 @@ class SensorWorker(QThread):
 
         self.dev.set_image_registration_mode(openni2.IMAGE_REGISTRATION_DEPTH_TO_COLOR)
 
-        cam_settings = None  # color_stream.camera
-        print(cam_settings)
+        cam_settings = None
+        # TODO changing the settings crashes on kinect, put this line back in fpr primeSensor
+        #cam_settings = self.color_stream.camera
 
         if cam_settings is not None:
             print("Disabling auto exposure and white balance")
@@ -74,7 +76,9 @@ class SensorWorker(QThread):
             print("No cam settings")
 
         self.depth_max = self.depth_stream.get_max_pixel_value()
-        self.depth_min = 1 # self.depth_stream.get_min_pixel_value()
+        self.depth_min = 1
+        # TODO another one of those Kinect crashes
+        #self.depth_min = self.depth_stream.get_min_pixel_value()
 
         fx = (0.5 * self.width) // np.tan(0.5 * self.depth_stream.get_horizontal_fov())
         fy = (0.5 * self.height) // np.tan(0.5 * self.depth_stream.get_vertical_fov())
@@ -202,7 +206,6 @@ class SensorWorker(QThread):
             self.vox_grid = TSDF(vol_dim=volume_bounds, intristics=self.k_pyr[0])
             self.last_frame = self.current_frame
             self.vox_grid.integrate(self.last_frame[1][0], self.c2w, self.last_frame[0])
-            print(self.vox_grid)
             return
 
         # TODO change 2nd param

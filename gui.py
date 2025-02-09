@@ -1,4 +1,3 @@
-import random
 import sys
 import numpy as np
 from skimage import measure
@@ -21,7 +20,7 @@ class MeshWidget(QOpenGLWidget):
         self.vox_grid = None
         self.setFixedSize(600, 600)
 
-        self.rotX = 30.0
+        self.rotX = 0.0
         self.rotY = 0.0
         self.rotZ = 0.0
 
@@ -34,6 +33,12 @@ class MeshWidget(QOpenGLWidget):
         self.vertVBO = None
         self.colorVBO = None
         self.normalVBO = None
+
+    def closeEvent(self, event):
+        self.makeCurrent()
+        self.doneCurrent()
+        self.deleteLater()
+        event.accept()
 
     def initializeGL(self):
         gl.glClearColor(0.2, 0.2, 0.2, 1.0)
@@ -64,12 +69,11 @@ class MeshWidget(QOpenGLWidget):
 
         gl.glShadeModel(gl.GL_SMOOTH)
 
-        self.get_mesh()
-        gl.glPushMatrix()  # push the current matrix to the current stack
+        gl.glPushMatrix()
 
-        gl.glTranslate(0.0, 0.0, -5.0)  # third, translate cube to specified depth
-        gl.glScale(3.0, -3.0, 3.0)  # second, scale cube
-        gl.glRotate(self.rotX, 1.0, 0.0, 0.0)
+        gl.glTranslate(0.0, 0.0, -5.0)
+        gl.glScale(3.0, 3.0, 3.0)
+        gl.glRotate(self.rotX+180, 1.0, 0.0, 0.0)
         gl.glRotate(self.rotY, 0.0, 1.0, 0.0)
         gl.glRotate(self.rotZ, 0.0, 0.0, 1.0)
 
@@ -114,7 +118,6 @@ class MeshWidget(QOpenGLWidget):
 
     def get_mesh(self):
         if self.vox_grid is not None:
-            print("generating new mesh...")
             sdf_numpy = self.vox_grid.sdf_values.cpu().numpy()
             color_sdf = self.vox_grid.rgb_values.cpu().numpy()
             voxel_size = 0.02
@@ -161,7 +164,23 @@ class MeshWidget(QOpenGLWidget):
     def update_grid(self, new_vox_grid):
         # Update voxel grid
         self.vox_grid = new_vox_grid
+        self.get_mesh()
         self.update()
+
+    def set_rot_x(self, value):
+        self.rotX = value
+        self.update()
+
+    def set_rot_y(self, value):
+        self.rotY = value
+        self.update()
+
+    def set_rot_z(self, value):
+        self.rotZ = value
+        self.update()
+
+    def reset(self):
+        self.vox_grid = None
 
 
 class MainWindow(QMainWindow):
@@ -172,6 +191,7 @@ class MainWindow(QMainWindow):
         self.color_panel = QLabel()
         self.depth_panel = QLabel()
 
+        self.sliders = []
         self.setup_gui()
 
         self.sensor.new_frame.connect(self.get_img_from_frame)
@@ -182,9 +202,25 @@ class MainWindow(QMainWindow):
     def setup_gui(self):
         self.setWindowTitle("Kinect Fusion")
         central_widget = QWidget()
+        xSlider = QSlider(Qt.Horizontal)
+        ySlider = QSlider(Qt.Horizontal)
+        zSlider = QSlider(Qt.Horizontal)
+        xSlider.setRange(-360, 360)
+        xSlider.setValue(0)
+        ySlider.setRange(-360, 360)
+        ySlider.setValue(0)
+        zSlider.setRange(-360, 360)
+        zSlider.setValue(0)
+
+        self.sliders = [xSlider, ySlider, zSlider]
+
         reset_btn = QPushButton("Reset")
         save_btn = QPushButton("Save Mesh")
+
         buttonLayout = QHBoxLayout()
+        buttonLayout.addWidget(xSlider)
+        buttonLayout.addWidget(ySlider)
+        buttonLayout.addWidget(zSlider)
         buttonLayout.addWidget(reset_btn)
         buttonLayout.addWidget(save_btn)
 
@@ -202,9 +238,22 @@ class MainWindow(QMainWindow):
 
         reset_btn.clicked.connect(self.reset)
         save_btn.clicked.connect(self.mesh_panel.write_mesh_file)
+        xSlider.valueChanged.connect(self.mesh_panel.set_rot_x)
+        ySlider.valueChanged.connect(self.mesh_panel.set_rot_y)
+        zSlider.valueChanged.connect(self.mesh_panel.set_rot_z)
+
+    def closeEvent(self, event):
+        if self.sensor.is_running:
+            print("stopping sensor thread")
+            self.sensor.stop()
+            self.sensor.wait()
+            self.sensor.deleteLater()
+            print("stopped thread")
+        self.close()
 
     def reset(self):
         self.sensor.reset()
+        self.mesh_panel.reset()
 
     def get_img_from_frame(self, frame):
         color_map = frame[0].cpu().numpy()
@@ -223,10 +272,3 @@ class MainWindow(QMainWindow):
 
         self.color_panel.setPixmap(QPixmap.fromImage(color_img).scaledToHeight(240))
         self.depth_panel.setPixmap(QPixmap.fromImage(depth_img).scaledToHeight(240))
-
-
-if __name__ == '__main__':
-    app = QApplication(sys.argv)
-    win = MainWindow()
-    win.show()
-    sys.exit(app.exec())

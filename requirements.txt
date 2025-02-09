@@ -8,3 +8,4 @@ primesense~=2.2.0.30.post5
 scikit-image~=0.25.0
 PyQt5~=5.15.11
 opencv-python~=4.11.0.86
+PyOpenGL~=3.1.9
