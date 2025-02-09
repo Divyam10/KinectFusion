@@ -10,6 +10,7 @@ class ICP(torch.nn.Module):
         self.symmetric_error = symmetric_error
 
     def forward(self, depth_source, depth_target, pose, K):
+        
         max_iterations = 1
         if hasattr(self.optimizer, "max_iterations"):
             max_iterations = self.optimizer.max_iterations
@@ -25,6 +26,9 @@ class ICP(torch.nn.Module):
         for i in range(max_iterations):
             R = pose[:3, :3]
             t = pose[:3, -1]
+            # R = R.to(dtype=torch.float64)
+            # t = t.to(dtype=torch.float64)
+
             fx, fy, cx, cy = K[0, 0], K[1, 1], K[0, 2], K[1, 2]
 
             # x̃ = Rx + t

@@ -176,6 +176,9 @@ class SensorWorker(QThread):
 
         # TODO maybe adjust and maybe move
         dep_pyr = [d / 1000.0 for d in dep_pyr]
+        for d in dep_pyr:
+            d[(d < 0.2) | (d > 4.0)] = 0
+
 
         return dep_pyr
 
@@ -195,7 +198,8 @@ class SensorWorker(QThread):
             (self.height, self.width, 3))
 
         # TODO ?
-        depth_frame_data[depth_frame_data == 65535] = 0
+
+        # depth_frame_data[depth_frame_data == 65535] = 0
         return color_frame_data, depth_frame_data
 
     def process_frame(self):
