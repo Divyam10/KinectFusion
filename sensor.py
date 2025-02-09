@@ -6,6 +6,7 @@ from icp.icp import ICP
 from volume_ray_final import *
 from bilateral_filter import bilateral_filtering
 from block_averaging_subsampling import block_averaging
+import load_util as util
 
 
 class SensorWorker(QThread):
@@ -17,7 +18,10 @@ class SensorWorker(QThread):
         #self.is_running = threading.Event()
         self.is_running = True
         self.cuda_device = None
-        self.counter = 1
+        self.counter = 0
+        self.use_data = False
+        self.data = None
+        self.data_idx = 0
 
         if torch.cuda.is_available():
             print("Using CUDA")
@@ -119,6 +123,9 @@ class SensorWorker(QThread):
                 self.new_grid.emit(self.vox_grid)
                 #self.counter = 0
             self.counter = (self.counter + 1) % 10
+            # TODO stop if end of dataset is reached
+            #if self.data_idx < len(self.data):
+            #    self.data_idx += 1
 
     def stop(self):
         self.is_running = False
@@ -179,6 +186,7 @@ class SensorWorker(QThread):
     def reset(self):
         # TODO: more logic for resetting reconstruction?
         self.last_frame = None
+        self.c2w = np.eye(4)
         print("reset reconstruction")
 
     def read_frame(self):
@@ -196,7 +204,13 @@ class SensorWorker(QThread):
         return color_frame_data, depth_frame_data
 
     def process_frame(self):
-        color_map, depth_map = self.read_frame()
+        # TODO?
+        if self.use_data:
+            color_map, depth_map = self.read_frame_from_data()
+        else:
+            color_map, depth_map = self.read_frame()
+
+
         dep_pyr = self.create_depth_pyramid(depth_map)
 
         self.current_frame = [color_map, dep_pyr]
@@ -212,3 +226,12 @@ class SensorWorker(QThread):
         self.calc_icp(dep_pyr, self.last_frame[1])
         self.vox_grid.integrate(self.current_frame[1][0], self.c2w, self.current_frame[0])
 
+    def load_data(self, depth_file, rgb_file, trajectory_file):
+        self.data = util.prepare_data(depth_file, rgb_file, trajectory_file)
+        self.use_data = True
+        print("Loaded data from files")
+        # TODO?
+
+    def read_frame_from_data(self):
+        #TODO
+        return [], []

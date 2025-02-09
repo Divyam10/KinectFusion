@@ -233,6 +233,11 @@ class MainWindow(QMainWindow):
         main_layout.addWidget(self.mesh_panel)
         main_layout.addLayout(input_layout)
 
+        load_data_act = QAction("Load Data", self)
+        menu_bar = self.menuBar()
+
+        menu_bar.addAction(load_data_act)
+
         central_widget.setLayout(main_layout)
         self.setCentralWidget(central_widget)
 
@@ -241,6 +246,13 @@ class MainWindow(QMainWindow):
         xSlider.valueChanged.connect(self.mesh_panel.set_rot_x)
         ySlider.valueChanged.connect(self.mesh_panel.set_rot_y)
         zSlider.valueChanged.connect(self.mesh_panel.set_rot_z)
+        load_data_act.triggered.connect(self.select_files)
+
+    def select_files(self):
+        rgb_file = QFileDialog.getOpenFileName(self, "Select RGB file", "./data", "*.txt")[0]
+        depth_file = QFileDialog.getOpenFileName(self, "Select depth file", "./data", "*.txt")[0]
+        trajectory_file = QFileDialog.getOpenFileName(self, "Select ground-truth file", "./data", "*.txt")[0]
+        self.sensor.load_data(rgb_file, depth_file, trajectory_file)
 
     def closeEvent(self, event):
         if self.sensor.is_running:
@@ -254,6 +266,8 @@ class MainWindow(QMainWindow):
     def reset(self):
         self.sensor.reset()
         self.mesh_panel.reset()
+        for s in self.sliders:
+            s.setValue(0)
 
     def get_img_from_frame(self, frame):
         color_map = frame[0].cpu().numpy()
