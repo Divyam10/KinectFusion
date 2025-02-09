@@ -11,7 +11,7 @@ from icp.icp import ICP
 
 import volume_ray_final as tsdf
 from primesense import openni2
-
+import cv2
 
 DATA_DIR = '/home/zeus/masters/3DSMC/project/KinectFusion_/dataset/rgbd_dataset_freiburg1_desk'
 DATA_PATH = os.path.join(os.getcwd(), DATA_DIR)
@@ -29,7 +29,6 @@ width_l3 = width_l2 // 2
 fps = 30
 
 dist = "/home/zeus/Install/kinect/openni2/OpenNI2/Packaging/OpenNI2-x64/Redist/"
-# can also accept the path of the OpenNI redistribution
 openni2.initialize(dist)
 
 dev = openni2.Device.open_any()
@@ -62,20 +61,20 @@ elif torch.backends.mps.is_available():
     device = torch.device("mps")
 else:
     device = torch.device("cpu")
-# device = torch.device("cpu")
 
-# define allowed range of depth values in meters
 d_max = 5
 d_min = 0.25
 
 num_scales = 3
 
-K = torch.tensor([[fx, 0, px], [0, fy, py], [0, 0, 1]]).to(dtype=torch.float64).to(device)
+K = torch.tensor([[fx, 0, px], [0, fy, py], [0, 0, 1]]
+                 ).to(dtype=torch.float64).to(device)
 c2w = torch.eye(4, dtype=torch.float64, device=device)
 
-c2w[0, 3] = -0.25  # -0.25
-c2w[1, 3] = 1.0  # 1.0
+c2w[0, 3] = -0.25
+c2w[1, 3] = 1.0
 c2w[2, 3] = -0.1
+
 
 def get_time():
     if torch.cuda.is_available():
@@ -89,9 +88,7 @@ def get_time():
 def plot_3d_figure(point_cloud, normals, colors_np):
     point_cloud_np = point_cloud.view(-1, 3).cpu().numpy()
     normals_np = normals.view(-1, 3).cpu().numpy()
-    # colors_np = colors_np.view(-1, 3).cpu().numpy()
 
-    # Normalize colors (ensure they are in range [0, 1])
     if colors_np.max() > 1.0:
         colors_np = colors_np / 255.0
 
@@ -116,39 +113,45 @@ icp_solvers = [
         occlusion_threshold=0.1, symmetric_error=True)
 ]
 
-# icp_solvers = [
-#     ICP(optimizer=None, occlusion_threshold=0.1, symmetric_error=True),
-#     ICP(optimizer=None, occlusion_threshold=0.1, symmetric_error=True),
-#     ICP(optimizer=None, occlusion_threshold=0.1, symmetric_error=True)
-# ]
 
 multiscales = [torch.nn.MaxPool2d(1 << i, 1 << i) for i in range(num_scales)]
 
 start = 0
 end = 300
 
-# depth, rgb, c2w = read_data(data, start)
 done = False
 i = 0
+
+j = 0
 while not done:
     depth_frame = depth_stream.read_frame()
     color_frame = color_stream.read_frame()
+    
+    if j<=15:
+        j+=1
+        continue
 
     depth_frame_data = np.frombuffer(
         depth_frame.get_buffer_as_uint16(), dtype=np.uint16).reshape((height, width))
     depth0 = depth_frame_data.astype(np.float32)
     color0 = np.fromstring(color_frame.get_buffer_as_uint8(),
                            dtype=np.uint8).reshape(480, 640, 3)
-    # color0  = cv2.cvtColor(color0,cv2.COLOR_BGR2RGB)
+    color0 = cv2.cvtColor(color0, cv2.COLOR_BGR2RGB)
+    color0 = cv2.flip(color0, 1)
+    depth0 = cv2.flip(depth0, 1)
+
     depth0 /= 1000.
     depth0[(depth0 < 0.1) | (depth0 > 5.0)] = 0.0
-    
+
     color0 = torch.from_numpy(color0).to(device)
     depth0 = torch.from_numpy(depth0).to(device)
     H, W = depth0.shape
     if i == 0:
         volume_bounds = tsdf.get_vol_bnds(
             depth0, K.cpu().numpy(), c2w.cpu().numpy())
+        # volume_bounds = np.array([[-2.80372819,  2.30372819],
+        #                  [-2.16529614,  2.16529614],
+        #                  [-2.1,         2.68699994]])
         vox_grid = tsdf.TSDF(vol_dim=volume_bounds, intristics=K)
         vox_grid.integrate(depth0, c2w.cpu().numpy(), color0)
         i += 1
@@ -197,8 +200,8 @@ while not done:
     t1 = get_time()
     time_list += [t1 - t0]
     # print("processed frame: {:d}, time taken: {:f}s".format(i, t1 - t0))
-    i+=1
-    if i==300:
+    i += 1
+    if i == 50:
         break
 
 

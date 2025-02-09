@@ -38,6 +38,7 @@ def get_vol_bnds(depth_im, cam_intr, cam_pose):
         vol_bnds[:, 0], np.amin(view_frust_pts, axis=1))
     vol_bnds[:, 1] = np.maximum(
         vol_bnds[:, 1], np.amax(view_frust_pts, axis=1))
+    print(vol_bnds)
     return vol_bnds
 
 
