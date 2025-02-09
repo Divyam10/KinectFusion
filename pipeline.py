@@ -201,15 +201,21 @@ optimizer = LM_optimizer(max_iterations=10)
 icp = ICP(optimizer=None, occlusion_threshold=0.1, symmetric_error=True)
 
 icp_solvers = [
-    ICP(optimizer=LM_optimizer(max_iterations=6, damping_factor=1.0e-4), occlusion_threshold=0.1, symmetric_error=False),
-    ICP(optimizer=LM_optimizer(max_iterations=3, damping_factor=1.0e-4), occlusion_threshold=0.1, symmetric_error=False),
-    ICP(optimizer=LM_optimizer(max_iterations=3, damping_factor=1.0e-2), occlusion_threshold=0.1, symmetric_error=False)
+    ICP(optimizer=LM_optimizer(max_iterations=6, damping_factor=1.0e-4), occlusion_threshold=0.1, symmetric_error=True),
+    ICP(optimizer=LM_optimizer(max_iterations=3, damping_factor=1.0e-4), occlusion_threshold=0.1, symmetric_error=True),
+    ICP(optimizer=LM_optimizer(max_iterations=3, damping_factor=1.0e-2), occlusion_threshold=0.1, symmetric_error=True)
 ]
+
+# icp_solvers = [
+#     ICP(optimizer=None, occlusion_threshold=0.1, symmetric_error=True),
+#     ICP(optimizer=None, occlusion_threshold=0.1, symmetric_error=True),
+#     ICP(optimizer=None, occlusion_threshold=0.1, symmetric_error=True)
+# ]
 
 multiscales = [torch.nn.MaxPool2d(1<<i, 1<<i) for i in range(num_scales)]
 
 start = 0
-end = 5
+end = 30
 print(len(data))
 
 depth, rgb, c2w = read_data(data, start)
@@ -251,7 +257,11 @@ for i in range(start+1, min(len(data), end+1)):
             K_scaled[0, 2] /= 2 ** j
             K_scaled[1, 2] /= 2 ** j
 
-        T10 = icp_solvers[j](dpt_curr_pyr[j], dpt1_pyr[j], T10, K_scaled)
+        T10, err_msg = icp_solvers[j](dpt_curr_pyr[j], dpt1_pyr[j], T10, K_scaled)
+        if err_msg:
+            print("ERROR:", err_msg)
+        else:
+            print("No error")
         # print("T10 -", j)
         # print(T10)
 
@@ -278,18 +288,18 @@ c2w_gt_list = np.stack(c2w_gt_list, 0)
 c2w_list = np.stack(c2w_list, 0)
 traj_gt = np.array(c2w_gt_list)[:, :3, 3]
 traj = np.array(c2w_list)[:, :3, 3]
-# print(c2w_gt_list[-1])
-# print(c2w_list[-1])
-# plt.figure(figsize=(10, 6))
-# plt.plot(traj_gt[:, 0], traj_gt[:, 1], label="Ground Truth", color="blue")
-# plt.plot(traj[:, 0], traj[:, 1], label="Estimated", color="red", linestyle="--")
-# plt.legend()
-# plt.title("Trajectory Comparison")
-# plt.xlabel("X")
-# plt.ylabel("Y")
-# plt.grid()
-# plt.show()
-#
+print(c2w_gt_list[-1])
+print(c2w_list[-1])
+plt.figure(figsize=(10, 6))
+plt.plot(traj_gt[:, 0], traj_gt[:, 1], label="Ground Truth", color="blue")
+plt.plot(traj[:, 0], traj[:, 1], label="Estimated", color="red", linestyle="--")
+plt.legend()
+plt.title("Trajectory Comparison")
+plt.xlabel("X")
+plt.ylabel("Y")
+plt.grid()
+plt.show()
+
 rmse = np.sqrt(np.mean(np.linalg.norm(traj_gt - traj, axis=-1) ** 2))
 print("RMSE: {:f}".format(rmse))
 #

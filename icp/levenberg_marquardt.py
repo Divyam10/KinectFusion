@@ -12,6 +12,11 @@ class LM_optimizer(torch.nn.Module):
         Jtj = torch.bmm(Jt, Jf)
         Jtj = Jtj.sum(dim=0)
 
+        Jtj = Jtj.to("cpu")
+        det = torch.linalg.det(Jtj)
+        print("Jtj determinant:", det)
+        Jtj = Jtj.to(Jt.device)
+
         Jtr = torch.bmm(Jt, residuals)
         Jtr = Jtr.sum(dim=0)
 
@@ -32,6 +37,9 @@ class LM_optimizer(torch.nn.Module):
             L = torch.linalg.cholesky(Hessian)
             delta_parameters = torch.cholesky_solve(-Jtr, L)
 
-        return delta_parameters
+        err_msg = ""
+        if det > 1.e28 or torch.isnan(det):
+            err_msg += f"Jtj determinant it too high or NaN - {det}\n"
+        return delta_parameters, err_msg
 
 
