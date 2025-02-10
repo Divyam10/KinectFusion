@@ -133,8 +133,7 @@ class TSDF():
         map_height = 480
         with torch.no_grad():
 
-            world2cam = torch.inverse(
-                torch.from_numpy(camera_pose)).float().to(self.device)
+            world2cam = torch.inverse(camera_pose).float()
             pts_camera = torch.matmul(
                 world2cam, torch.t(self.vox_Wcoords))
             z_points = pts_camera[2]
@@ -291,9 +290,9 @@ class TSDF():
         return valid_pts_mask
 
     @torch.no_grad()
-    def render_model(self, c2w, intri, imh, imw, near=0.5, far=5., n_samples=192):
+    def render_model(self, c2w, intri, imh, imw, near=0.1, far=4., n_samples=192):
 
-        c2w = torch.from_numpy(c2w).float()
+        c2w = c2w.float()
         c2w = c2w.to(self.device)
         rays_o, rays_d = self.get_rays(c2w, intri, imh, imw)  # [h, w, 3]
         z_vals = torch.linspace(near, far, n_samples).to(rays_o)  # [n_samples]

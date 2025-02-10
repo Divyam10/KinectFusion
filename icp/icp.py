@@ -64,7 +64,7 @@ class ICP(torch.nn.Module):
             # TODO: Test effects of occlusion mask and estimate how many pixels it is masking on average
             occlusion_mask = diff.norm(p=2, dim=-1) > self.occlusion_threshold
             mask = mask_source | mask_target | out_of_view_pixels | occlusion_mask
-            print("Masks", torch.sum(mask_source), torch.sum(mask_target), torch.sum(out_of_view_pixels), torch.sum(occlusion_mask))
+            # print("Masks", torch.sum(mask_source), torch.sum(mask_target), torch.sum(out_of_view_pixels), torch.sum(occlusion_mask))
 
             # Perform linear least squares if no optimizer provided
             if self.optimizer is None:
@@ -81,7 +81,7 @@ class ICP(torch.nn.Module):
                 A[mask] = 0.
                 b[mask] = 0.
 
-                print("Residuals (b):", b.min(), b.max(), b.mean(), b.norm(p=2) / b.numel())
+                # print("Residuals (b):", b.min(), b.max(), b.mean(), b.norm(p=2) / b.numel())
 
                 # Linear solver for A @ xi = b
                 if A.device.type == 'mps':
@@ -93,7 +93,7 @@ class ICP(torch.nn.Module):
                     optimized_parameters, residuals, rank, _ = torch.linalg.lstsq(A, b)
 
                 pose = self.construct_pose_from_parameters(optimized_parameters)
-                print("Parameters:", optimized_parameters, torch.norm(optimized_parameters[3:]) )
+                # print("Parameters:", optimized_parameters, torch.norm(optimized_parameters[3:]) )
 
                 err_msg = ""
                 if torch.isnan(optimized_parameters).any():
@@ -113,7 +113,7 @@ class ICP(torch.nn.Module):
 
             residuals[mask] = 0.
             residuals = residuals.view(H*W, 1, 1)
-            print("Residuals:", residuals.min(), residuals.max(), residuals.mean(), residuals.norm(p=2) / residuals.numel())
+            # print("Residuals:", residuals.min(), residuals.max(), residuals.mean(), residuals.norm(p=2) / residuals.numel())
 
             # print("loss:", torch.linalg.norm(residuals))
 
@@ -231,7 +231,7 @@ class ICP(torch.nn.Module):
         cos_theta = torch.cos(theta)
         eye_3 = torch.eye(3).to(xi)
 
-        print("Theta:", theta)
+        # print("Theta:", theta)
 
         if theta <= eps:
             e_w = eye_3
@@ -246,7 +246,7 @@ class ICP(torch.nn.Module):
         T[:3, :3] = e_w
         T[:3, 3] = torch.mv(j, v)
 
-        print("Translation magnitude:", T[:3, 3], torch.norm(T[:3, 3]))
+        # print("Translation magnitude:", T[:3, 3], torch.norm(T[:3, 3]))
 
         return T
 

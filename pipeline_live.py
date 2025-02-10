@@ -85,20 +85,7 @@ def get_time():
     return time.time()
 
 
-def plot_3d_figure(point_cloud, normals, colors_np):
-    point_cloud_np = point_cloud.view(-1, 3).cpu().numpy()
-    normals_np = normals.view(-1, 3).cpu().numpy()
 
-    if colors_np.max() > 1.0:
-        colors_np = colors_np / 255.0
-
-    pcd = o3d.geometry.PointCloud()
-
-    pcd.points = o3d.utility.Vector3dVector(point_cloud_np)
-    pcd.normals = o3d.utility.Vector3dVector(normals_np)
-    pcd.colors = o3d.utility.Vector3dVector(colors_np)
-
-    return pcd
 
 
 optimizer = LM_optimizer(max_iterations=10)
@@ -124,6 +111,7 @@ i = 0
 
 j = 0
 while not done:
+    t0 = get_time()
     depth_frame = depth_stream.read_frame()
     color_frame = color_stream.read_frame()
     
@@ -153,20 +141,14 @@ while not done:
         #                  [-2.16529614,  2.16529614],
         #                  [-2.1,         2.68699994]])
         vox_grid = tsdf.TSDF(vol_dim=volume_bounds, intristics=K)
-        vox_grid.integrate(depth0, c2w.cpu().numpy(), color0)
+        vox_grid.integrate(depth0, c2w, color0)
         i += 1
         continue
 
-    R = c2w[:3, :3]
-    t = c2w[:3, -1]
-    # vertices = torch.matmul(vertices, R.T) + t
-    # pcd = plot_3d_figure(vertices, normals, colors)
-
     time_list, c2w_list, c2w_gt_list = list(), list(), list()
-    # depth_curr, rgb_curr, c2w_curr = read_data(data, i)
-    t0 = get_time()
+   
 
-    depth1, color1, vertex01, normal1, mask1 = vox_grid.render_model(c2w.cpu().numpy(), K, H, W, near=d_min,
+    depth1, color1, vertex01, normal1, mask1 = vox_grid.render_model(c2w, K, H, W, near=d_min,
                                                                      far=d_max, n_samples=192)
 
     dpt_curr_pyr = [f(depth0.view(1, 1, H, W)) for f in multiscales]
@@ -195,12 +177,13 @@ while not done:
 
     c2w = c2w @ T10
 
-    vox_grid.integrate(depth0, c2w.cpu().numpy(), color0)
+    vox_grid.integrate(depth0, c2w, color0)
 
     t1 = get_time()
     time_list += [t1 - t0]
-    # print("processed frame: {:d}, time taken: {:f}s".format(i, t1 - t0))
     i += 1
+    print("processed frame: {:d}, time taken: {:f}s".format(i, t1 - t0))
+
     if i == 50:
         break
 
@@ -212,34 +195,3 @@ print("average processing time: {:f}s per frame, i.e. {:f} fps".format(
 tsdf.get_mesh(vox_grid)
 print("Mesh generation... Done!")
 
-# c2w_gt_list = np.stack(c2w_gt_list, 0)
-c2w_list = np.stack(c2w_list, 0)
-# traj_gt = np.array(c2w_gt_list)[:, :3, 3]
-traj = np.array(c2w_list)[:, :3, 3]
-# print(c2w_gt_list[-1])
-print(c2w_list[-1])
-plt.figure(figsize=(10, 6))
-# plt.plot(traj_gt[:, 0], traj_gt[:, 1], label="Ground Truth", color="blue")
-plt.plot(traj[:, 0], traj[:, 1], label="Estimated",
-         color="red", linestyle="--")
-plt.legend()
-plt.title("Trajectory Comparison")
-plt.xlabel("X")
-plt.ylabel("Y")
-plt.grid()
-plt.show()
-
-# rmse = np.sqrt(np.mean(np.linalg.norm(traj_gt - traj, axis=-1) ** 2))
-# print("RMSE: {:f}".format(rmse))
-#
-#
-# vertices1 = ICP.compute_vertices(depth1, K)
-# normals1 = ICP.compute_normals(vertices1)
-# colors1 = np.array([0, 0, 1]).reshape(1, 3).repeat(H*W, axis=0)
-#
-# R = c2w[:3, :3]
-# t = c2w[:3, -1]
-# vertices1 = torch.matmul(vertices1, R.T) + t
-# pcd1 = plot_3d_figure(vertices1, normals1, colors1)
-#
-# o3d.visualization.draw_geometries([pcd, pcd1], point_show_normal=False)

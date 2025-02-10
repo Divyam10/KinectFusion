@@ -12,10 +12,10 @@ class LM_optimizer(torch.nn.Module):
         Jtj = torch.bmm(Jt, Jf)
         Jtj = Jtj.sum(dim=0)
 
-        Jtj = Jtj.to("cpu")
+        # Jtj = Jtj.to("cpu")
         det = torch.linalg.det(Jtj)
-        print("Jtj determinant:", det)
-        Jtj = Jtj.to(Jt.device)
+        # print("Jtj determinant:", det)
+        # Jtj = Jtj.to(Jt.device)
 
         Jtr = torch.bmm(Jt, residuals)
         Jtr = Jtr.sum(dim=0)
@@ -27,6 +27,7 @@ class LM_optimizer(torch.nn.Module):
         # TODO: Add exception handling for cholesky (torch._C._LinAlgError: linalg.cholesky: The factorization could not be completed because the input is not positive-definite (t)
         # Linear solver for H @ del(xi) = -Jtr
         if Hessian.device.type == 'mps':
+            exit(1)
             Hessian = Hessian.to("cpu")
             Jtr = Jtr.to("cpu")
             # L = torch.linalg.cholesky(Hessian)
