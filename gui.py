@@ -22,6 +22,7 @@ class MeshWidget(QOpenGLWidget):
         self.rotX = 0.0
         self.rotY = 0.0
         self.rotZ = 0.0
+        self.scale = 0.0
 
         self.verts = []
         self.faces = []
@@ -61,6 +62,7 @@ class MeshWidget(QOpenGLWidget):
 
         gl.glEnable(gl.GL_DEPTH_TEST)
         gl.glEnable(gl.GL_COLOR_MATERIAL)
+        gl.glEnable(gl.GL_NORMALIZE)
         gl.glColorMaterial(gl.GL_FRONT_AND_BACK, gl.GL_AMBIENT_AND_DIFFUSE)
         gl.glEnable(gl.GL_LIGHTING)
         gl.glEnable(gl.GL_LIGHT0)
@@ -73,7 +75,7 @@ class MeshWidget(QOpenGLWidget):
         gl.glPushMatrix()
 
         gl.glTranslate(0.0, 0.0, -5.0)
-        gl.glScale(3.0, 3.0, 3.0)
+        gl.glScale(3.0+self.scale, 3.0+self.scale, 3.0+self.scale)
         gl.glRotate(self.rotX+180, 1.0, 0.0, 0.0)
         gl.glRotate(self.rotY, 0.0, 1.0, 0.0)
         gl.glRotate(self.rotZ, 0.0, 0.0, 1.0)
@@ -97,25 +99,27 @@ class MeshWidget(QOpenGLWidget):
         gl.glPopMatrix()
 
     def write_mesh_file(self):
-        filename = "reconstruction.off"
-        with open(filename, 'w') as f:
-            if self.color_mode:
-                f.write("COFF\n")
-            else:
-                f.write("OFF\n")
-            f.write(f"{len(self.verts)} {len(self.faces)} 0\n")
-
-            for i, v in enumerate(self.verts):
-                vertex_str = f"{v[0]} {v[1]} {v[2]}"
+        if self.vox_grid is not None:
+            filename = "reconstruction.off"
+            with open(filename, 'w') as f:
                 if self.color_mode:
-                    color_int = (self.vertex_colors[i] * 255).astype(int)
-                    color_str = ' '.join(map(str, color_int))
-                    f.write(f"{vertex_str} {color_str}\n")
+                    f.write("COFF\n")
                 else:
-                    f.write(f"{vertex_str}\n")
+                    f.write("OFF\n")
+                f.write(f"{len(self.verts)} {len(self.faces)} 0\n")
 
-            for face in self.faces:
-                f.write(f"{len(face)} {' '.join(map(str, face))}\n")
+                for i, v in enumerate(self.verts):
+                    vertex_str = f"{v[0]} {v[1]} {v[2]}"
+                    if self.color_mode:
+                        color_int = (self.vertex_colors[i] * 255).astype(int)
+                        color_str = ' '.join(map(str, color_int))
+                        f.write(f"{vertex_str} {color_str}\n")
+                    else:
+                        f.write(f"{vertex_str}\n")
+
+                for face in self.faces:
+                    f.write(f"{len(face)} {' '.join(map(str, face))}\n")
+            print("saved mesh to ", filename)
 
     def get_mesh(self):
         if self.vox_grid is not None:
@@ -129,19 +133,20 @@ class MeshWidget(QOpenGLWidget):
             self.faces = faces
 
             if self.color_mode:
-                y = np.arange(color_sdf.shape[1]) * voxel_size
                 x = np.arange(color_sdf.shape[0]) * voxel_size
+                y = np.arange(color_sdf.shape[1]) * voxel_size
                 z = np.arange(color_sdf.shape[2]) * voxel_size
 
-                r_interpolator = RegularGridInterpolator((x, y, z), color_sdf[..., 0])
-                g_interpolator = RegularGridInterpolator((x, y, z), color_sdf[..., 1])
-                b_interpolator = RegularGridInterpolator((x, y, z), color_sdf[..., 2])
+                r_interpolator = RegularGridInterpolator((x, y, z), color_sdf[..., 0], bounds_error=False, fill_value=0)
+                g_interpolator = RegularGridInterpolator((x, y, z), color_sdf[..., 1], bounds_error=False, fill_value=0)
+                b_interpolator = RegularGridInterpolator((x, y, z), color_sdf[..., 2], bounds_error=False, fill_value=0)
 
                 r_values = r_interpolator(self.verts)
                 g_values = g_interpolator(self.verts)
                 b_values = b_interpolator(self.verts)
 
-                self.vertex_colors = np.stack((b_values, g_values, r_values), axis=-1)
+                self.vertex_colors = np.stack((r_values, g_values, b_values), axis=-1) / 255.
+
             else:
                 default_color = np.array([0.5, 0.5, 1.0])  # RGB color for blue
 
@@ -180,6 +185,10 @@ class MeshWidget(QOpenGLWidget):
         self.rotZ = value
         self.update()
 
+    def set_scale(self, value):
+        self.scale = value
+        self.update()
+
     def set_color_mode(self, value):
         self.color_mode = value
         self.get_mesh()
@@ -211,13 +220,16 @@ class MainWindow(QMainWindow):
         xSlider = QSlider(Qt.Orientation.Horizontal)
         ySlider = QSlider(Qt.Orientation.Horizontal)
         zSlider = QSlider(Qt.Orientation.Horizontal)
+        sSlider = QSlider(Qt.Orientation.Horizontal)
         xSlider.setRange(-360, 360)
         xSlider.setValue(0)
         ySlider.setRange(-360, 360)
         ySlider.setValue(0)
         zSlider.setRange(-360, 360)
         zSlider.setValue(0)
-        self.sliders = [xSlider, ySlider, zSlider]
+        sSlider.setRange(-2, 20)
+        sSlider.setValue(0)
+        self.sliders = [xSlider, ySlider, zSlider, sSlider]
 
         colorChx = QCheckBox("Color mode")
 
@@ -228,6 +240,7 @@ class MainWindow(QMainWindow):
         buttonLayout.addWidget(xSlider)
         buttonLayout.addWidget(ySlider)
         buttonLayout.addWidget(zSlider)
+        buttonLayout.addWidget(sSlider)
         buttonLayout.addWidget(colorChx)
         buttonLayout.addWidget(reset_btn)
         buttonLayout.addWidget(save_btn)
@@ -253,6 +266,7 @@ class MainWindow(QMainWindow):
         xSlider.valueChanged.connect(self.mesh_panel.set_rot_x)
         ySlider.valueChanged.connect(self.mesh_panel.set_rot_y)
         zSlider.valueChanged.connect(self.mesh_panel.set_rot_z)
+        sSlider.valueChanged.connect(self.mesh_panel.set_scale)
         colorChx.toggled.connect(self.mesh_panel.set_color_mode)
 
     def closeEvent(self, event):
