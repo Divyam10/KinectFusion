@@ -20,7 +20,7 @@ class SensorWorker(QThread):
         #self.is_running = threading.Event()
         self.is_running = True
         self.cuda_device = None
-        self.refresh_rate_mesh_render = 5
+        self.refresh_rate_mesh_render = 15
         self.counter = self.refresh_rate_mesh_render - 1
         self.num_scales = 3
 
@@ -176,8 +176,7 @@ class SensorWorker(QThread):
                     K_scaled[0, 2] /= 2 ** j
                     K_scaled[1, 2] /= 2 ** j
 
-                T10, err_msg = self.icp_solvers[j](
-                    dpt_curr_pyr[j], dpt1_pyr[j], T10, K_scaled)
+                T10, err_msg = self.icp_solvers[j](dpt_curr_pyr[j], dpt1_pyr[j], T10, K_scaled)
                 if err_msg:
                     print("ERROR:", err_msg)
                 else:
