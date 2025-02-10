@@ -1,9 +1,12 @@
 from primesense import openni2
 from PyQt5.QtCore import *
+import torch
+import numpy as np
+import cv2
 
 from icp.levenberg_marquardt import LM_optimizer
 from icp.icp import ICP
-from volume_ray_final import *
+import volume_ray_final as tsdf
 from bilateral_filter import bilateral_filtering
 from block_averaging_subsampling import block_averaging
 
@@ -17,7 +20,9 @@ class SensorWorker(QThread):
         #self.is_running = threading.Event()
         self.is_running = True
         self.cuda_device = None
-        self.counter = 1
+        self.refresh_rate_mesh_render = 5
+        self.counter = self.refresh_rate_mesh_render - 1
+        self.num_scales = 3
 
         if torch.cuda.is_available():
             print("Using CUDA")
@@ -29,13 +34,19 @@ class SensorWorker(QThread):
             print("Using CPU")
             self.cuda_device = torch.device("cpu")
 
-        self.optimizer1 = LM_optimizer(max_iterations=6)
-        self.optimizer2 = LM_optimizer(max_iterations=3)
-        self.optimizer3 = LM_optimizer(max_iterations=3)
-        self.icp1 = ICP(optimizer=self.optimizer1, symmetric_error=True)
-        self.icp2 = ICP(optimizer=self.optimizer2, symmetric_error=True)
-        self.icp3 = ICP(optimizer=self.optimizer3, symmetric_error=True)
+        self.optimizer = LM_optimizer(max_iterations=10)
+        self.icp = ICP(optimizer=None, occlusion_threshold=0.1, symmetric_error=True)
 
+        self.icp_solvers = [
+            ICP(optimizer=LM_optimizer(max_iterations=6, damping_factor=1.0e-4),
+                occlusion_threshold=0.1, symmetric_error=True),
+            ICP(optimizer=LM_optimizer(max_iterations=3, damping_factor=1.0e-4),
+                occlusion_threshold=0.1, symmetric_error=True),
+            ICP(optimizer=LM_optimizer(max_iterations=3, damping_factor=1.0e-2),
+                occlusion_threshold=0.1, symmetric_error=True)
+        ]
+
+        self.multiscales = [torch.nn.MaxPool2d(1 << i, 1 << i) for i in range(self.num_scales)]
 
         # Constants
         self.height = 480
@@ -46,7 +57,7 @@ class SensorWorker(QThread):
         self.width_l3 = self.width_l2 // 2
         fps = 30
         dist = "/home/zeus/Install/kinect/openni2/OpenNI2/Packaging/OpenNI2-x64/Redist/"
-        openni2.initialize(dist)  # can also accept the path of the OpenNI redistribution
+        openni2.initialize()  # can also accept the path of the OpenNI redistribution
 
         self.dev = openni2.Device.open_any()
         self.dev.set_depth_color_sync_enabled(True)
@@ -55,25 +66,23 @@ class SensorWorker(QThread):
         self.color_stream = self.dev.create_color_stream()
 
         self.depth_stream.configure_mode(self.width, self.height, fps, openni2.PIXEL_FORMAT_DEPTH_1_MM)
-        # TODO kinect crash if this line is used
-    # depth_stream.configure_mode(width, height, fps, openni2.PIXEL_FORMAT_DEPTH_1_MM)
         self.color_stream.configure_mode(self.width, self.height, fps, openni2.PIXEL_FORMAT_RGB888)
         self.depth_stream.start()
         self.color_stream.start()
 
         self.dev.set_image_registration_mode(openni2.IMAGE_REGISTRATION_DEPTH_TO_COLOR)
 
-        cam_settings = None
+        #cam_settings = None
         # TODO changing the settings crashes on kinect, put this line back in fpr primeSensor
         #cam_settings = self.color_stream.camera
 
-        if cam_settings is not None:
-            print("Disabling auto exposure and white balance")
-            cam_settings.set_auto_exposure(False)
-            cam_settings.set_auto_white_balance(False)
-            self.color_stream.camera = cam_settings
-        else:
-            print("No cam settings")
+        #if cam_settings is not None:
+        #    print("Disabling auto exposure and white balance")
+        #    cam_settings.set_auto_exposure(False)
+        #    cam_settings.set_auto_white_balance(False)
+        #    self.color_stream.camera = cam_settings
+        #else:
+        #    print("No cam settings")
 
         self.depth_max = self.depth_stream.get_max_pixel_value()
         self.depth_min = 1
@@ -85,27 +94,13 @@ class SensorWorker(QThread):
         px = self.width // 2.0
         py = self.height // 2.0
 
-        self.k1 = np.array([
-            [fx, 0.0, px],
-            [0.0, fy, py],
-            [0.0, 0.0, 1.0]
-        ], dtype=np.float32)
-        self.k2 = np.array([
-            [0.5 * fx, 0.0, 0.5 * px],
-            [0.0, 0.5 * fy, 0.5 * py],
-            [0.0, 0.0, 1.0]
-        ], dtype=np.float32)
-        self.k3 = np.array([
-            [0.25 * fx, 0.0, 0.25 * px],
-            [0.0, 0.25 * fy, 0.25 * py],
-            [0.0, 0.0, 1.0]
-        ], dtype=np.float32)
-        self.k_pyr = [self.k1, self.k2, self.k3]
 
-        self.c2w = np.eye(4)
+        self.k = torch.tensor([[fx, 0, px], [0, fy, py], [0, 0, 1]]).to(dtype=torch.float64).to(self.cuda_device)
+
+        self.c2w = torch.eye(4, dtype=torch.float64, device=self.cuda_device)
         self.c2w[0, 3] = -0.25  # -0.25
         self.c2w[1, 3] = 1.0  # 1.0
-        self.c2w[2, 3] = -0.1 
+        self.c2w[2, 3] = -0.1
         self.volume_bounds = None
         self.vox_grid = None
         self.last_frame = None
@@ -121,7 +116,8 @@ class SensorWorker(QThread):
             if self.counter == 0:  # only update mesh every tenth frame?
                 self.new_grid.emit(self.vox_grid)
                 #self.counter = 0
-            self.counter = (self.counter + 1) % 10
+            self.counter = (self.counter + 1) % self.refresh_rate_mesh_render
+            print(self.counter)
 
     def stop(self):
         self.is_running = False
@@ -130,61 +126,14 @@ class SensorWorker(QThread):
         self.color_stream.stop()
         openni2.unload()
 
-    def calc_icp(self, depth_pyr, tsdf_depth_pyr):
-        t10, _ = self.icp3(depth_pyr[2],
-                   tsdf_depth_pyr[2],
-                   torch.tensor(np.identity(4), dtype=torch.float32).to(self.cuda_device),
-                   torch.tensor(self.k_pyr[2], dtype=torch.float32).to(self.cuda_device))
-        # print("icp l3")
-        # print(t10)
-        t10, _ = self.icp2(depth_pyr[1],
-                   tsdf_depth_pyr[1],
-                   t10,
-                   torch.tensor(self.k_pyr[1], dtype=torch.float32).to(self.cuda_device))
-        # print("icp l2")
-        # print(t10)
-        t10, _ = self.icp1(depth_pyr[0],
-                   tsdf_depth_pyr[0],
-                   t10,
-                   torch.tensor(self.k_pyr[0], dtype=torch.float32).to(self.cuda_device))
-        # print("icp l1")
-        # print(t10)
-        # TODO range/instead check for Null?
-        '''    if torch.allclose(t10, torch.eye(4).to(cuda_device), atol=1e-3):  #TODO
-            print("ICP failed or did not improve pose")
-        else:
-            c2w = c2w @ t10.cpu().numpy()'''
-        self.c2w = self.c2w @ t10.cpu().numpy()
-
-    def create_depth_pyramid(self, depth_frame_data):
-        depth_map_l1, validity_mask = bilateral_filtering(
-            depth_image=depth_frame_data,
-            kernel_size=21,
-            sigma_spatial=self.sigma_spatial,
-            sigma_range=self.sigma_range,
-            min_depth=self.depth_min,
-            max_depth=self.depth_max
-        )
-        depth_map_l2 = block_averaging(
-            depth_map_l1, 2, self.sigma_range
-        )
-        depth_map_l3 = block_averaging(
-            depth_map_l2, 2, self.sigma_range
-        )
-
-        dep_pyr = [depth_map_l1, depth_map_l2, depth_map_l3]
-
-        # TODO maybe adjust and maybe move
-        dep_pyr = [d / 1000.0 for d in dep_pyr]
-        for d in dep_pyr:
-            d[(d < 0.2) | (d > 4.0)] = 0
-
-
-        return dep_pyr
-
     def reset(self):
         # TODO: more logic for resetting reconstruction?
         self.last_frame = None
+        self.c2w = torch.eye(4, dtype=torch.float64, device=self.cuda_device)
+        self.c2w[0, 3] = -0.25  # -0.25
+        self.c2w[1, 3] = 1.0  # 1.0
+        self.c2w[2, 3] = -0.1
+        self.counter = 0
         print("reset reconstruction")
 
     def read_frame(self):
@@ -197,25 +146,52 @@ class SensorWorker(QThread):
         color_frame_data = torch.frombuffer(color_frame.get_buffer_as_uint8(), dtype=torch.int8).reshape(
             (self.height, self.width, 3))
 
-        # TODO ?
+        depth_frame_data /= 1000.0
+        depth_frame_data[(depth_frame_data < 0.1) | (depth_frame_data > 5.0)] = 0.0
 
-        # depth_frame_data[depth_frame_data == 65535] = 0
         return color_frame_data, depth_frame_data
 
     def process_frame(self):
         color_map, depth_map = self.read_frame()
-        dep_pyr = self.create_depth_pyramid(depth_map)
-
-        self.current_frame = [color_map, dep_pyr]
+        h, w = depth_map.shape
+        self.current_frame = [color_map, depth_map]
 
         if self.last_frame is None:
-            volume_bounds = get_vol_bnds(dep_pyr[0], self.k_pyr[0], self.c2w)
-            self.vox_grid = TSDF(vol_dim=volume_bounds, intristics=self.k_pyr[0])
+            volume_bounds = tsdf.get_vol_bnds(depth_map, self.k.cpu().numpy(), self.c2w.cpu().numpy())
+            self.vox_grid = tsdf.TSDF(vol_dim=volume_bounds, intristics=self.k)
             self.last_frame = self.current_frame
-            self.vox_grid.integrate(self.last_frame[1][0], self.c2w, self.last_frame[0])
+            self.vox_grid.integrate(depth_map, self.c2w, color_map)
             return
 
+        R = self.c2w[:3, :3]
+        t = self.c2w[:3, -1]
+
+        depth1, color1, vertex01, normal1, mask1 = self.vox_grid.render_model(self.c2w, self.k, h, w,
+                                                                              near=0.25, far=5., n_samples=192)
+
+        dpt_curr_pyr = [f(depth_map.view(1, 1, h, w)) for f in self.multiscales]
+        dpt_curr_pyr = [d.squeeze() for d in dpt_curr_pyr]
+        dpt1_pyr = [f(depth1.view(1, 1, h, w)) for f in self.multiscales]
+        dpt1_pyr = [d.squeeze() for d in dpt1_pyr]
+
+        T10 = torch.eye(4, dtype=torch.float64, ).to(self.cuda_device)
+
+        for j in reversed(range(self.num_scales)):
+            K_scaled = self.k.clone()
+            if j != 0:
+                K_scaled[0, 0] /= 2 ** j
+                K_scaled[1, 1] /= 2 ** j
+                K_scaled[0, 2] /= 2 ** j
+                K_scaled[1, 2] /= 2 ** j
+
+            T10, err_msg = self.icp_solvers[j](
+                dpt_curr_pyr[j], dpt1_pyr[j], T10, K_scaled)
+            if err_msg:
+                print("ERROR:", err_msg)
+            else:
+                print("No error")
+
         # TODO change 2nd param
-        self.calc_icp(dep_pyr, self.last_frame[1])
-        self.vox_grid.integrate(self.current_frame[1][0], self.c2w, self.current_frame[0])
+        self.c2w = self.c2w @ T10
+        self.vox_grid.integrate(depth_map, self.c2w, color_map)
 
