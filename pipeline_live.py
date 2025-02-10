@@ -197,7 +197,8 @@ while not done:
     t_icp = get_time()
 
     T10 = torch.eye(4, dtype=torch.float32,).to(device)
-    
+
+    err_msgs = ""
     try:
         for j in reversed(range(num_scales)):
             K_scaled = K.clone()
@@ -209,17 +210,20 @@ while not done:
 
             T10, err_msg = icp_solvers[j](
                 dpt_curr_pyr[j], dpt1_pyr[j], T10, K_scaled)
-            if err_msg:
-                print("ERROR:", err_msg)
-            else:
-                print("No error")
+
+            err_msgs += err_msg + "\n"
+
+        if err_msg:
+            print("ERROR:", err_msgs)
+            print("Skipping current frame...")
+        else:
+            print("No errors found, integrating current frame...")
+            c2w = c2w @ T10
+            vox_grid.integrate(depth0, c2w, color0)
             # print("T10 -", j)
             # print(T10)
     except Exception as X:
         print(X)
-    else:
-        c2w = c2w @ T10
-        vox_grid.integrate(depth0, c2w, color0)
 
     t_icp_done = get_time()
     #t1 = get_time()
