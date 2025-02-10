@@ -20,8 +20,8 @@ depth_file = os.path.join(DATA_PATH, 'depth.txt')
 rgb_file = os.path.join(DATA_PATH, 'rgb.txt')
 trajectory_file = os.path.join(DATA_PATH, 'groundtruth.txt')
 
-height = 480
-width = 640
+height = 480//2
+width = 640//2
 height_l2 = height // 2
 width_l2 = width // 2
 height_l3 = height_l2 // 2
@@ -62,14 +62,14 @@ elif torch.backends.mps.is_available():
 else:
     device = torch.device("cpu")
 
-d_max = 5
+d_max = 5 #TODO check
 d_min = 0.25
 
 num_scales = 3
 
 K = torch.tensor([[fx, 0, px], [0, fy, py], [0, 0, 1]]
-                 ).to(dtype=torch.float64).to(device)
-c2w = torch.eye(4, dtype=torch.float64, device=device)
+                 ).to(dtype=torch.float32).to(device)
+c2w = torch.eye(4, dtype=torch.float32, device=device)
 
 c2w[0, 3] = -0.25
 c2w[1, 3] = 1.0
@@ -91,6 +91,15 @@ def get_time():
 optimizer = LM_optimizer(max_iterations=10)
 icp = ICP(optimizer=None, occlusion_threshold=0.1, symmetric_error=True)
 
+'''icp_solvers = [
+    ICP(optimizer=None,
+        occlusion_threshold=0.1, symmetric_error=True),
+    ICP(optimizer=None,
+        occlusion_threshold=0.1, symmetric_error=True),
+    ICP(optimizer=None,
+        occlusion_threshold=0.1, symmetric_error=True)
+]'''
+
 icp_solvers = [
     ICP(optimizer=LM_optimizer(max_iterations=6, damping_factor=1.0e-4),
         occlusion_threshold=0.1, symmetric_error=True),
@@ -99,6 +108,24 @@ icp_solvers = [
     ICP(optimizer=LM_optimizer(max_iterations=3, damping_factor=1.0e-2),
         occlusion_threshold=0.1, symmetric_error=True)
 ]
+
+'''icp_solvers = [
+    ICP(optimizer=None,
+        occlusion_threshold=0.1, symmetric_error=True),
+    ICP(optimizer=None,
+        occlusion_threshold=0.1, symmetric_error=True),
+    ICP(optimizer=LM_optimizer(max_iterations=3, damping_factor=1.0e-2),
+        occlusion_threshold=0.1, symmetric_error=True)
+]'''
+
+'''icp_solvers = [
+    ICP(optimizer=LM_optimizer(max_iterations=3, damping_factor=1.0e-4),
+        occlusion_threshold=0.1, symmetric_error=True),
+    ICP(optimizer=None,
+        occlusion_threshold=0.1, symmetric_error=True),
+    ICP(optimizer=None,
+        occlusion_threshold=0.1, symmetric_error=True)
+]'''
 
 
 multiscales = [torch.nn.MaxPool2d(1 << i, 1 << i) for i in range(num_scales)]
@@ -111,7 +138,8 @@ i = 0
 
 j = 0
 while not done:
-    t0 = get_time()
+    t_data_loading = get_time()
+    #t0 = get_time()
     depth_frame = depth_stream.read_frame()
     color_frame = color_stream.read_frame()
     
@@ -119,21 +147,28 @@ while not done:
         j+=1
         continue
 
-    depth_frame_data = np.frombuffer(
-        depth_frame.get_buffer_as_uint16(), dtype=np.uint16).reshape((height, width))
-    depth0 = depth_frame_data.astype(np.float32)
-    color0 = np.fromstring(color_frame.get_buffer_as_uint8(),
-                           dtype=np.uint8).reshape(480, 640, 3)
-    color0 = cv2.cvtColor(color0, cv2.COLOR_BGR2RGB)
-    color0 = cv2.flip(color0, 1)
-    depth0 = cv2.flip(depth0, 1)
-
+    #TODO
+    depth0 = np.frombuffer(depth_frame.get_buffer_as_uint16(), dtype=np.uint16)
+    depth0 = torch.from_numpy(depth0.astype(np.float32)).to(device).reshape((height, width))
+    #depth0 = torch.frombuffer(depth_frame.get_buffer_as(ctype=openni2.ctypes.c_uint16), dtype=torch.int16).to(device).reshape((height, width))
+    depth0 = torch.flip(depth0, dims=[1, 0])
+    #depth0 = depth0.to(torch.float32)
+    
+    color0 = np.frombuffer(color_frame.get_buffer_as_uint8(), dtype=np.uint8)
+    color0 = torch.from_numpy(color0).to(device).reshape(height, width, 3)
+    #color0 = torch.frombuffer(color_frame.get_buffer_as(ctype=openni2.ctypes.c_uint8), dtype=torch.int8).to(device).reshape(480, 640, 3)
+    color0 = torch.flip(color0, dims=[1, 0])
+    color0 = color0[:, :, [2, 1, 0]]  # Swap channels from BGR to RGB
+    #color0 = color0.to(torch.float32)
+    
     depth0 /= 1000.
     depth0[(depth0 < 0.1) | (depth0 > 5.0)] = 0.0
 
-    color0 = torch.from_numpy(color0).to(device)
-    depth0 = torch.from_numpy(depth0).to(device)
-    H, W = depth0.shape
+    H, W = depth0.shape #TODO remove
+    
+   
+    
+    
     if i == 0:
         volume_bounds = tsdf.get_vol_bnds(
             depth0, K.cpu().numpy(), c2w.cpu().numpy())
@@ -147,43 +182,54 @@ while not done:
 
     time_list, c2w_list, c2w_gt_list = list(), list(), list()
    
+    t_tsdf = get_time()
 
     depth1, color1, vertex01, normal1, mask1 = vox_grid.render_model(c2w, K, H, W, near=d_min,
                                                                      far=d_max, n_samples=192)
+    
+    t_tsdf_done = get_time()
 
     dpt_curr_pyr = [f(depth0.view(1, 1, H, W)) for f in multiscales]
     dpt_curr_pyr = [d.squeeze() for d in dpt_curr_pyr]
     dpt1_pyr = [f(depth1.view(1, 1, H, W)) for f in multiscales]
     dpt1_pyr = [d.squeeze() for d in dpt1_pyr]
 
-    T10 = torch.eye(4, dtype=torch.float64,).to(device)
+    t_icp = get_time()
 
-    for j in reversed(range(num_scales)):
-        K_scaled = K.clone()
-        if j != 0:
-            K_scaled[0, 0] /= 2 ** j
-            K_scaled[1, 1] /= 2 ** j
-            K_scaled[0, 2] /= 2 ** j
-            K_scaled[1, 2] /= 2 ** j
+    T10 = torch.eye(4, dtype=torch.float32,).to(device)
+    
+    try:
+        for j in reversed(range(num_scales)):
+            K_scaled = K.clone()
+            if j != 0:
+                K_scaled[0, 0] /= 2 ** j
+                K_scaled[1, 1] /= 2 ** j
+                K_scaled[0, 2] /= 2 ** j
+                K_scaled[1, 2] /= 2 ** j
 
-        T10, err_msg = icp_solvers[j](
-            dpt_curr_pyr[j], dpt1_pyr[j], T10, K_scaled)
-        if err_msg:
-            print("ERROR:", err_msg)
-        else:
-            print("No error")
-        # print("T10 -", j)
-        # print(T10)
+            T10, err_msg = icp_solvers[j](
+                dpt_curr_pyr[j], dpt1_pyr[j], T10, K_scaled)
+            if err_msg:
+                print("ERROR:", err_msg)
+            else:
+                print("No error")
+            # print("T10 -", j)
+            # print(T10)
+    except Exception as X:
+        print(X)
+    else:
+        c2w = c2w @ T10
+        vox_grid.integrate(depth0, c2w, color0)
 
-    c2w = c2w @ T10
-
-    vox_grid.integrate(depth0, c2w, color0)
-
-    t1 = get_time()
-    time_list += [t1 - t0]
+    t_icp_done = get_time()
+    #t1 = get_time()
+    #time_list += [t1 - t0]
     i += 1
-    print("processed frame: {:d}, time taken: {:f}s".format(i, t1 - t0))
-
+    # print("processed frame: {:d}, time data: {:f}s".format(i, t_data_loading_done - t_data_loading))
+    # print("processed frame: {:d}, time tsdf: {:f}s".format(i, t_tsdf_done - t_tsdf))
+    # print("processed frame: {:d}, time icp: {:f}s".format(i, t_icp_done - t_icp))
+    # print("processed frame: {:d}, time taken: {:f}s".format(i, t1 - t0))
+    print(1/(time.time() - t_data_loading))
     if i == 50:
         break
 

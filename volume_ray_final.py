@@ -45,7 +45,7 @@ def get_vol_bnds(depth_im, cam_intr, cam_pose):
 def get_mesh(vox_grid):
     sdf_numpy = vox_grid.sdf_values.cpu().numpy()
     color_sdf = vox_grid.rgb_values.cpu().numpy()
-    voxel_size = 0.02
+    voxel_size = 0.01
     #voxel_size = 20
 
     verts, faces, norms, vals = measure.marching_cubes(sdf_numpy, level=0)
@@ -56,6 +56,9 @@ def get_mesh(vox_grid):
     y = np.arange(color_sdf.shape[1]) * voxel_size
     x = np.arange(color_sdf.shape[0]) * voxel_size
     z = np.arange(color_sdf.shape[2]) * voxel_size
+    verts[:, 0] = np.clip(verts[:, 0], x.min(), x.max())
+    verts[:, 1] = np.clip(verts[:, 1], y.min(), y.max())
+    verts[:, 2] = np.clip(verts[:, 2], z.min(), z.max())
 
     r_interpolator = RegularGridInterpolator((x, y, z), color_sdf[..., 0])
     g_interpolator = RegularGridInterpolator((x, y, z), color_sdf[..., 1])
@@ -79,7 +82,7 @@ def get_mesh(vox_grid):
 
 class TSDF():
 
-    def __init__(self, vol_dim, intristics, voxel_size=0.02):
+    def __init__(self, vol_dim, intristics, voxel_size=0.01):
 
         # self._vol_dim = vol_dim
         self._vol_bnds = vol_dim
@@ -129,8 +132,8 @@ class TSDF():
         self._voxel_size = torch.asarray(self._voxel_size).cuda()
 
     def integrate(self, depth_image, camera_pose, color_img, sdf_trunc=0.03):
-        map_width = 640
-        map_height = 480
+        map_width = depth_image.shape[1]
+        map_height = depth_image.shape[0]
         with torch.no_grad():
 
             world2cam = torch.inverse(camera_pose).float()
@@ -151,7 +154,7 @@ class TSDF():
 
             z_pix = pts_camera[2, valid_pix]
             # depth_image = depth_image.cuda().to(torch.float32)
-            color_img = color_img.cuda().to(torch.float32)
+            # color_img = color_img.cuda().to(torch.float32)
             depth_val = depth_image[y_pix[valid_pix], x_pix[valid_pix]]
             rgb_val = color_img[y_pix[valid_pix], x_pix[valid_pix]]
 
@@ -227,7 +230,7 @@ class TSDF():
             vox_coord[:, 1], 0., self._vol_dim[1] - 1)
         vox_coord[:, 2] = torch.clamp(
             vox_coord[:, 2], 0., self._vol_dim[2] - 1)
-        vox_coord = vox_coord.long()
+        vox_coord = vox_coord.int()
         vx, vy, vz = vox_coord[:, 0], vox_coord[:, 1], vox_coord[:, 2]
         v_nn = field_vol[vx, vy, vz]
         return v_nn
@@ -239,7 +242,7 @@ class TSDF():
         assert len(field_dim) == 3 or len(field_dim) == 4
         n_pts = coords_w.shape[0]
         vox_coord = torch.floor(
-            (coords_w - self._vol_origin[None, :]) / self._voxel_size).long()  # [N, 3]
+            (coords_w - self._vol_origin[None, :]) / self._voxel_size).int() # [N, 3]
 
         # for border points, don't do interpolation
         non_border_mask = (vox_coord[:, 0] < self._vol_dim[0] - 1) & (vox_coord[:, 1] < self._vol_dim[1] - 1) & \
@@ -283,7 +286,7 @@ class TSDF():
 
     def get_pts_inside(self, pts, margin=0):
         vox_coord = torch.floor((pts - self._vol_origin[None, :].to(
-            self.device)) / self._voxel_size.to(self.device)).long()  # [N, 3]
+            self.device)) / self._voxel_size.to(self.device)).int() # [N, 3]
         valid_pts_mask = (vox_coord[..., 0] >= margin) & (vox_coord[..., 0] < self._vol_dim[0] - margin) \
             & (vox_coord[..., 1] >= margin) & (vox_coord[..., 1] < self._vol_dim[1] - margin) \
             & (vox_coord[..., 2] >= margin) & (vox_coord[..., 2] < self._vol_dim[2] - margin)
@@ -291,9 +294,7 @@ class TSDF():
 
     @torch.no_grad()
     def render_model(self, c2w, intri, imh, imw, near=0.1, far=4., n_samples=192):
-
-        c2w = c2w.float()
-        c2w = c2w.to(self.device)
+        #c2w = c2w.to(self.device)
         rays_o, rays_d = self.get_rays(c2w, intri, imh, imw)  # [h, w, 3]
         z_vals = torch.linspace(near, far, n_samples).to(rays_o)  # [n_samples]
         ray_pts_w = (rays_o[:, :, None, :] + rays_d[:, :, None, :] *
@@ -395,7 +396,7 @@ class TSDF():
         vx, vy, vz = vox_coord[:, 0], vox_coord[:, 1], vox_coord[:, 2]
         vox_idx = vz + vy * self._vol_dim[-1] + \
             vx * self._vol_dim[-1] * self._vol_dim[-2]
-        return vox_idx.long()
+        return vox_idx.int()
 
     def get_rays(self, c2w, intrinsics, H, W):
         device = self.device
