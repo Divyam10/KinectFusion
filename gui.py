@@ -12,6 +12,62 @@ from PyQt5.QtWidgets import *
 
 from sensor import SensorWorker
 
+class Signals(QObject):
+    createdArrays = pyqtSignal(object, object, object, object)
+
+class MeshWorker(QRunnable):
+    def __init__(self, vox_grid, color_mode):
+        super(QRunnable, self).__init__()
+        self.vox_grid = vox_grid
+        self.color_mode = color_mode
+        self.signals = Signals()
+
+    def run(self):
+        if self.vox_grid is not None:
+            sdf_numpy = self.vox_grid.sdf_values.cpu().numpy()
+            color_sdf = self.vox_grid.rgb_values.cpu().numpy()
+            voxel_size = 0.02
+            # voxel_size = 20
+
+            verts, faces, norms, vals = measure.marching_cubes(sdf_numpy, level=0)
+            verts = verts * voxel_size
+            faces = faces
+
+            if self.color_mode:
+                x = np.arange(color_sdf.shape[0]) * voxel_size
+                y = np.arange(color_sdf.shape[1]) * voxel_size
+                z = np.arange(color_sdf.shape[2]) * voxel_size
+
+                r_interpolator = RegularGridInterpolator((x, y, z), color_sdf[..., 0], bounds_error=False, fill_value=0)
+                g_interpolator = RegularGridInterpolator((x, y, z), color_sdf[..., 1], bounds_error=False, fill_value=0)
+                b_interpolator = RegularGridInterpolator((x, y, z), color_sdf[..., 2], bounds_error=False, fill_value=0)
+
+                r_values = r_interpolator(verts)
+                g_values = g_interpolator(verts)
+                b_values = b_interpolator(verts)
+
+                vertex_colors = np.stack((r_values, g_values, b_values), axis=-1) / 255.
+
+            else:
+                default_color = np.array([0.5, 0.5, 1.0])  # RGB color for blue
+
+                # Set all vertex colors to the default color
+                vertex_colors = np.tile(default_color, (verts.shape[0], 1))
+
+            min_bound = np.min(verts, axis=0)
+            max_bound = np.max(verts, axis=0)
+            center = (min_bound + max_bound) / 2.0
+            verts -= center  # Shift mesh to origin
+
+            # Scale mesh to fit within [-1, 1] range
+            max_extent = np.max(max_bound - min_bound)
+            verts /= max_extent  # Normalize size
+
+            vert_array = np.reshape(verts,(1, -1)).astype(np.float32)
+            color_array = np.reshape(vertex_colors,(1, -1)).astype(np.float32)
+            normal_array = np.reshape(norms,(1, -1)).astype(np.float32)
+            self.signals.createdArrays.emit(vert_array, color_array, normal_array, faces)
+
 
 class MeshWidget(QOpenGLWidget):
     def __init__(self, parent=None):
@@ -121,6 +177,19 @@ class MeshWidget(QOpenGLWidget):
                     f.write(f"{len(face)} {' '.join(map(str, face))}\n")
             print("saved mesh to ", filename)
 
+    def call_mesh(self):
+        mesh_worker = MeshWorker(self.vox_grid, self.color_mode)
+        mesh_worker.signals.createdArrays.connect(self.update_mesh)
+        QThreadPool.globalInstance().start(mesh_worker)
+
+    def update_mesh(self, v, c, n, f):
+        print("updating mesh")
+        self.vertVBO.set_array(v)
+        self.colorVBO.set_array(c)
+        self.normalVBO.set_array(n)
+        self.faces = f
+        self.update()
+
     def get_mesh(self):
         if self.vox_grid is not None:
             sdf_numpy = self.vox_grid.sdf_values.cpu().numpy()
@@ -170,7 +239,8 @@ class MeshWidget(QOpenGLWidget):
     def update_grid(self, new_vox_grid):
         # Update voxel grid
         self.vox_grid = new_vox_grid
-        self.get_mesh()
+        #self.get_mesh()
+        self.call_mesh()
         self.update()
 
     def set_rot_x(self, value):
@@ -191,7 +261,8 @@ class MeshWidget(QOpenGLWidget):
 
     def set_color_mode(self, value):
         self.color_mode = value
-        self.get_mesh()
+        #self.get_mesh()
+        self.call_mesh()
         self.update()
 
     def reset(self):
