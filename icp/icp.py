@@ -10,6 +10,7 @@ class ICP(torch.nn.Module):
         self.symmetric_error = symmetric_error
 
     def forward(self, depth_source, depth_target, pose, K):
+        
         max_iterations = 1
         if hasattr(self.optimizer, "max_iterations"):
             max_iterations = self.optimizer.max_iterations
@@ -25,6 +26,9 @@ class ICP(torch.nn.Module):
         for i in range(max_iterations):
             R = pose[:3, :3]
             t = pose[:3, -1]
+            # R = R.to(dtype=torch.float64)
+            # t = t.to(dtype=torch.float64)
+
             fx, fy, cx, cy = K[0, 0], K[1, 1], K[0, 2], K[1, 2]
 
             # x̃ = Rx + t
@@ -60,8 +64,7 @@ class ICP(torch.nn.Module):
             # TODO: Test effects of occlusion mask and estimate how many pixels it is masking on average
             occlusion_mask = diff.norm(p=2, dim=-1) > self.occlusion_threshold
             mask = mask_source | mask_target | out_of_view_pixels | occlusion_mask
-            print(torch.sum(mask_source), torch.sum(mask_target), torch.sum(out_of_view_pixels), torch.sum(occlusion_mask))
-            print(mask.shape, torch.sum(mask))
+            # print("Masks", torch.sum(mask_source), torch.sum(mask_target), torch.sum(out_of_view_pixels), torch.sum(occlusion_mask))
 
             # Perform linear least squares if no optimizer provided
             if self.optimizer is None:
@@ -78,6 +81,8 @@ class ICP(torch.nn.Module):
                 A[mask] = 0.
                 b[mask] = 0.
 
+                # print("Residuals (b):", b.min(), b.max(), b.mean(), b.norm(p=2) / b.numel())
+
                 # Linear solver for A @ xi = b
                 if A.device.type == 'mps':
                     A = A.to("cpu")
@@ -88,23 +93,48 @@ class ICP(torch.nn.Module):
                     optimized_parameters, residuals, rank, _ = torch.linalg.lstsq(A, b)
 
                 pose = self.construct_pose_from_parameters(optimized_parameters)
-                return pose
+                # print("Parameters:", optimized_parameters, torch.norm(optimized_parameters[3:]) )
+
+                err_msg = ""
+                if torch.isnan(optimized_parameters).any():
+                    err_msg += "NaN in optimized parameters\n"
+                if optimized_parameters[0] > 0.05 or optimized_parameters[1] > 0.05 or optimized_parameters[2] > 0.5:
+                    err_msg += f"Large rotation - {optimized_parameters[0:3]}\n"
+                if torch.norm(optimized_parameters[3:]) > 0.05:
+                    err_msg += f"Large translation - {optimized_parameters[3:]}, {torch.norm(optimized_parameters[3:])}\n"
+                if b.norm(p=2) / b.numel() > 0.0002:
+                    err_msg += f"Large residual - {b.norm(p=2) / b.numel()}\n"
+                if torch.sum(out_of_view_pixels) + torch.sum(occlusion_mask) > 200000:
+                    err_msg += f"Too many masked pixels - {torch.sum(out_of_view_pixels)}, {torch.sum(occlusion_mask)}\n"
+                return pose, err_msg
 
 
             Jf = self.compute_jacobian(vertices_transformed, normals)
 
             residuals[mask] = 0.
             residuals = residuals.view(H*W, 1, 1)
+            # print("Residuals:", residuals.min(), residuals.max(), residuals.mean(), residuals.norm(p=2) / residuals.numel())
 
             # print("loss:", torch.linalg.norm(residuals))
 
             Jf[mask] = 0.
             Jf = Jf.view(H*W, 1, -1)
 
-            delta_parameters = self.optimizer(residuals, Jf)
-            pose = self.exp_se3(delta_parameters) @ pose
+            delta_parameters, err_msg = self.optimizer(residuals, Jf)
+            delta_pose = self.exp_se3(delta_parameters)
+            pose = delta_pose @ pose
 
-        return pose
+            if torch.norm(delta_pose[:3, 3]) > 0.05:
+                err_msg += f"Large translation - {delta_pose[:3, 3]}, {torch.norm(delta_pose[:3, 3])}\n"
+            if residuals.norm(p=2) / residuals.numel() > 0.0002:
+                err_msg += f"Large residual - {residuals.norm(p=2) / residuals.numel()}\n"
+            if torch.sum(out_of_view_pixels) + torch.sum(occlusion_mask) > 200000:
+                err_msg += f"Too many masked pixels - {torch.sum(out_of_view_pixels)}, {torch.sum(occlusion_mask)}\n"
+
+            if err_msg:
+                return pose, err_msg
+
+        return pose, ""
 
     @staticmethod
     def compute_vertices(depth_map, K):
@@ -112,7 +142,7 @@ class ICP(torch.nn.Module):
         device = depth_map.device
         fx, fy, cx, cy = K[0, 0], K[1, 1], K[0, 2], K[1, 2]
 
-        pixel_grid_v, pixel_grid_u = torch.meshgrid([torch.arange(0, W), torch.arange(0, H)], indexing="xy")
+        pixel_grid_v, pixel_grid_u = torch.meshgrid([torch.arange(0, H), torch.arange(0, W)], indexing="ij")
         pixel_grid_u = pixel_grid_u.to(device)
         pixel_grid_v = pixel_grid_v.to(device)
 
@@ -201,6 +231,8 @@ class ICP(torch.nn.Module):
         cos_theta = torch.cos(theta)
         eye_3 = torch.eye(3).to(xi)
 
+        # print("Theta:", theta)
+
         if theta <= eps:
             e_w = eye_3
             j = eye_3
@@ -214,6 +246,8 @@ class ICP(torch.nn.Module):
         T[:3, :3] = e_w
         T[:3, 3] = torch.mv(j, v)
 
+        # print("Translation magnitude:", T[:3, 3], torch.norm(T[:3, 3]))
+
         return T
 
     @staticmethod
@@ -225,4 +259,3 @@ class ICP(torch.nn.Module):
             [0, 0, 0, 1]
         ]).to(parameters.device)
         return pose
-
