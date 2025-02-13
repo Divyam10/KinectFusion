@@ -194,8 +194,7 @@ class TSDF():
             return 0
 
     def get_normals(self):
-        """Compute normal volume
-        """
+ 
         nx, ny, nz = self._vol_dim
         device = self.device
         dx = torch.cat([(self.sdf_values[1:, :, :] - self.sdf_values[:-1, :, :]) /
@@ -215,8 +214,6 @@ class TSDF():
         return norms
 
     def get_nn(self, field_vol, coords_w):
-        """Get nearest-neigbor values from a given volume
-        """
         field_dim = field_vol.shape
         assert len(field_dim) == 3 or len(field_dim) == 4
         vox_coord_float = (
@@ -236,57 +233,67 @@ class TSDF():
         return v_nn
 
     def tril_interp(self, field_vol, coords_w):
-        """Get tri-linear interpolated value from a given volume
-        """
         field_dim = field_vol.shape
         assert len(field_dim) == 3 or len(field_dim) == 4
+        device = self.device
+        dtype = field_vol.dtype
+
         n_pts = coords_w.shape[0]
-        vox_coord = torch.floor(
-            (coords_w - self._vol_origin[None, :]) / self._voxel_size).int() # [N, 3]
+        
+        vox_coord = torch.floor((coords_w - self._vol_origin) / self._voxel_size).int()  # [N, 3]
 
-        # for border points, don't do interpolation
-        non_border_mask = (vox_coord[:, 0] < self._vol_dim[0] - 1) & (vox_coord[:, 1] < self._vol_dim[1] - 1) & \
-                          (vox_coord[:, 2] < self._vol_dim[2] - 1)
-        v_interp = torch.zeros(n_pts) if len(
-            field_dim) == 3 else torch.zeros(n_pts, field_vol.shape[-1])
-        v_interp = v_interp.to(self.device)
-        vx_, vy_, vz_ = vox_coord[~non_border_mask,
-                                  0], vox_coord[~non_border_mask, 1], vox_coord[~non_border_mask, 2]
-        v_interp[~non_border_mask] = field_vol[vx_, vy_, vz_]
+        vox_coord = torch.clamp(vox_coord, min=torch.tensor(0, device=device), max=torch.tensor(self._vol_dim, device=device) - 2)
 
-        vx, vy, vz = vox_coord[non_border_mask, 0], vox_coord[non_border_mask,
-                                                              1], vox_coord[non_border_mask, 2]  # [N]
-        vox_idx = vz + vy * self._vol_dim[-1] + \
-            vx * self._vol_dim[-1] * self._vol_dim[-2]
-        vertices_coord = self.vox_Wcoords[vox_idx][:, :3]  # [N, 3]
-        r = (coords_w[non_border_mask] - vertices_coord) / self._voxel_size
-        rx, ry, rz = r[:, 0], r[:, 1], r[:, 2]
-        if len(field_dim) == 4:
-            rx = rx.unsqueeze(1)
-            ry = ry.unsqueeze(1)
-            rz = rz.unsqueeze(1)
-        v000 = field_vol[vx, vy, vz]
-        v001 = field_vol[vx, vy, vz+1]
-        v010 = field_vol[vx, vy+1, vz]
-        v011 = field_vol[vx, vy+1, vz+1]
-        v100 = field_vol[vx+1, vy, vz]
-        v101 = field_vol[vx+1, vy, vz+1]
-        v110 = field_vol[vx+1, vy+1, vz]
-        v111 = field_vol[vx+1, vy+1, vz+1]
-        v_interp[non_border_mask] = v000 * (1 - rx) * (1 - ry) * (1 - rz) \
-            + v001 * (1 - rx) * (1 - ry) * rz \
-            + v010 * (1 - rx) * ry * (1 - rz) \
-            + v011 * (1 - rx) * ry * rz \
-            + v100 * rx * (1 - ry) * (1 - rz) \
-            + v101 * rx * (1 - ry) * rz \
-            + v110 * rx * ry * (1 - rz) \
-            + v111 * rx * ry * rz
+        r = ((coords_w - self._vol_origin) / self._voxel_size) - vox_coord.float()
 
-        return v_interp
+        vx, vy, vz = vox_coord[:, 0], vox_coord[:, 1], vox_coord[:, 2]
+        vx1, vy1, vz1 = vx + 1, vy + 1, vz + 1
 
+        vol_dim_x, vol_dim_y, vol_dim_z = self._vol_dim
+        idx000 = vx * vol_dim_y * vol_dim_z + vy * vol_dim_z + vz
+        idx001 = vx * vol_dim_y * vol_dim_z + vy * vol_dim_z + vz1
+        idx010 = vx * vol_dim_y * vol_dim_z + vy1 * vol_dim_z + vz
+        idx011 = vx * vol_dim_y * vol_dim_z + vy1 * vol_dim_z + vz1
+        idx100 = vx1 * vol_dim_y * vol_dim_z + vy * vol_dim_z + vz
+        idx101 = vx1 * vol_dim_y * vol_dim_z + vy * vol_dim_z + vz1
+        idx110 = vx1 * vol_dim_y * vol_dim_z + vy1 * vol_dim_z + vz
+        idx111 = vx1 * vol_dim_y * vol_dim_z + vy1 * vol_dim_z + vz1
+
+        field_vol_flat = field_vol.reshape(-1, field_vol.shape[-1] if len(field_dim) == 4 else 1)
+
+        v000 = field_vol_flat[idx000]
+        v001 = field_vol_flat[idx001]
+        v010 = field_vol_flat[idx010]
+        v011 = field_vol_flat[idx011]
+        v100 = field_vol_flat[idx100]
+        v101 = field_vol_flat[idx101]
+        v110 = field_vol_flat[idx110]
+        v111 = field_vol_flat[idx111]
+
+        w000 = (1 - r[:, 0]) * (1 - r[:, 1]) * (1 - r[:, 2])
+        w001 = (1 - r[:, 0]) * (1 - r[:, 1]) * r[:, 2]
+        w010 = (1 - r[:, 0]) * r[:, 1] * (1 - r[:, 2])
+        w011 = (1 - r[:, 0]) * r[:, 1] * r[:, 2]
+        w100 = r[:, 0] * (1 - r[:, 1]) * (1 - r[:, 2])
+        w101 = r[:, 0] * (1 - r[:, 1]) * r[:, 2]
+        w110 = r[:, 0] * r[:, 1] * (1 - r[:, 2])
+        w111 = r[:, 0] * r[:, 1] * r[:, 2]
+
+        v_interp = torch.einsum('n,nc->nc', w000, v000) + \
+                torch.einsum('n,nc->nc', w001, v001) + \
+                torch.einsum('n,nc->nc', w010, v010) + \
+                torch.einsum('n,nc->nc', w011, v011) + \
+                torch.einsum('n,nc->nc', w100, v100) + \
+                torch.einsum('n,nc->nc', w101, v101) + \
+                torch.einsum('n,nc->nc', w110, v110) + \
+                torch.einsum('n,nc->nc', w111, v111)
+
+        return v_interp.squeeze(-1) if len(field_dim) == 3 else v_interp
+    
+    
     def get_pts_inside(self, pts, margin=0):
         vox_coord = torch.floor((pts - self._vol_origin[None, :].to(
-            self.device)) / self._voxel_size.to(self.device)).int() # [N, 3]
+            self.device)) / self._voxel_size.to(self.device)).int() 
         valid_pts_mask = (vox_coord[..., 0] >= margin) & (vox_coord[..., 0] < self._vol_dim[0] - margin) \
             & (vox_coord[..., 1] >= margin) & (vox_coord[..., 1] < self._vol_dim[1] - margin) \
             & (vox_coord[..., 2] >= margin) & (vox_coord[..., 2] < self._vol_dim[2] - margin)
@@ -329,7 +336,6 @@ class TSDF():
         valid_mask = self.get_pts_inside(updated_hit_pts)
         hit_pts[valid_mask, :] = updated_hit_pts[valid_mask, :]
 
-        # get depth values
         w2c = torch.inverse(c2w).to(self.device)
         hit_pts_c = (w2c[:3, :3] @ hit_pts.transpose(1, 0)
                      ).transpose(1, 0) + w2c[:3, 3][None, :]
@@ -337,21 +343,6 @@ class TSDF():
         depth_rend = torch.zeros(imh, imw).to(self.device)
         depth_rend[hit_surface_mask] = hit_pts_z
 
-        # vertex map
-        vertex_rend = torch.zeros(imh, imw, 3).to(self.device)
-        vertex_rend[hit_surface_mask] = hit_pts_c
-        # normal map
-        surf_norms_c = (w2c[:3, :3] @ surf_norms.transpose(1, 0)
-                        ).transpose(1, 0)  # [h, w, 3]
-        normal_rend = torch.zeros(imh, imw, 3).to(self.device)
-        normal_rend[hit_surface_mask] = surf_norms_c
-
-        if self.rgb_values is not None:
-            hit_colors = self.tril_interp(self.rgb_values, hit_pts)
-            color_rend = torch.zeros(imh, imw, 3).to(self.device)
-            color_rend[hit_surface_mask] = hit_colors
-        else:
-            color_rend = None
 
         # import matplotlib.pyplot as plt
 
@@ -369,23 +360,7 @@ class TSDF():
 
         # plt.show()
 
-        return depth_rend, color_rend, vertex_rend, normal_rend, hit_surface_mask
-
-    def render_pyramid(self, c2w, intri, imh, imw, n_pyr=4, near=0.5, far=5., n_samples=192):
-        K = intri.copy()
-        dep_pyr, rgb_pyr, vtx_pyr, nrm_pyr, mask_pyr = [], [], [], [], []
-        for l in range(n_pyr):
-            dep, rgb, vtx, nrm, mask = self.render_model(
-                c2w, K, imh, imw, near=near, far=far, n_samples=n_samples)
-            dep_pyr += [dep]
-            rgb_pyr += [rgb]
-            vtx_pyr += [vtx]
-            nrm_pyr += [nrm]
-            mask_pyr += [mask]
-            imh = imh // 2
-            imw = imw // 2
-            K /= 2
-        return dep_pyr, rgb_pyr, vtx_pyr, nrm_pyr, mask_pyr
+        return depth_rend, hit_surface_mask
 
     def get_voxel_idx(self, x):
 
