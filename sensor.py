@@ -125,7 +125,7 @@ class SensorWorker(QThread):
     def reset(self):
         # TODO: more logic for resetting reconstruction?
         self.last_frame = None
-        self.c2w = torch.eye(4, dtype=torch.float64, device=self.cuda_device)
+        self.c2w = torch.eye(4, dtype=torch.float32, device=self.cuda_device)
         self.c2w[0, 3] = -0.25  # -0.25
         self.c2w[1, 3] = 1.0  # 1.0
         self.c2w[2, 3] = -0.1

@@ -63,10 +63,7 @@ class MeshWorker(QRunnable):
             max_extent = np.max(max_bound - min_bound)
             verts /= max_extent  # Normalize size
 
-            vert_array = np.reshape(verts,(1, -1)).astype(np.float32)
-            color_array = np.reshape(vertex_colors,(1, -1)).astype(np.float32)
-            normal_array = np.reshape(norms,(1, -1)).astype(np.float32)
-            self.signals.createdArrays.emit(vert_array, color_array, normal_array, faces)
+            self.signals.createdArrays.emit(verts, vertex_colors, norms, faces)
 
 
 class MeshWidget(QOpenGLWidget):
@@ -184,10 +181,16 @@ class MeshWidget(QOpenGLWidget):
 
     def update_mesh(self, v, c, n, f):
         print("updating mesh")
-        self.vertVBO.set_array(v)
-        self.colorVBO.set_array(c)
-        self.normalVBO.set_array(n)
+        vert_array = np.reshape(v, (1, -1)).astype(np.float32)
+        color_array = np.reshape(c, (1, -1)).astype(np.float32)
+        normal_array = np.reshape(n, (1, -1)).astype(np.float32)
+
+        self.vertVBO.set_array(vert_array)
+        self.colorVBO.set_array(color_array)
+        self.normalVBO.set_array(normal_array)
         self.faces = f
+        self.verts = v
+        self.vertex_colors = c
         self.update()
 
     def get_mesh(self):
