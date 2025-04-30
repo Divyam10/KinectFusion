@@ -5,10 +5,21 @@ This repository contains an re-implementation of KinectFusion using Pytorch
 
 
 <p align="center">
-  <img src="assets\LiveDemo.gif" alt="Live KinectFusion Demo" width="500"/><br/><br/>
-  <img src="assets\frieburg_desk_2.png" alt="Mesh Preview 1" width="340" style="margin-right:10px;"/>
-  <img src="assets\frieburg_desk.png" alt="Mesh Preview 2" width="340"/>
+  <img src="assets/LiveDemo.gif" alt="Live KinectFusion Demo" width="700"/><br/><br/>
+   <sub><strong>Live KinectFusion Demo</strong></sub><br/><br/>
 </p>
+
+<div align="center">
+  <div style="display: inline-block; text-align: center; margin: 0 10px;">
+    <img src="assets/frieburg_desk_2.png" alt="Mesh Preview 1" width="340" height="240"/><br/>
+  </div>
+  <div style="display: inline-block; text-align: center; margin: 0 10px;">
+    <img src="assets/frieburg_desk_2.png" alt="Mesh Preview 2" width="340" height="240"/><br/>
+  </div>
+  <div style="width: 100%; text-align: center; margin-top: 5px;">
+    <sub><strong>Offline reconstructed mesh from frieburg desk dataset</strong></sub>
+  </div>
+</div>
 
 
 ## Installation
