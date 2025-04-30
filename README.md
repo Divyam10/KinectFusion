@@ -1,7 +1,15 @@
 
 # KinectFusion
 
-This repository contains an implementation of KinectFusion.
+This repository contains an re-implementation of KinectFusion using Pytorch
+
+
+<p align="center">
+  <img src="assets\LiveDemo.gif" alt="Live KinectFusion Demo" width="500"/><br/><br/>
+  <img src="assets\frieburg_desk_2.png" alt="Mesh Preview 1" width="340" style="margin-right:10px;"/>
+  <img src="assets\frieburg_desk.png" alt="Mesh Preview 2" width="340"/>
+</p>
+
 
 ## Installation
 
