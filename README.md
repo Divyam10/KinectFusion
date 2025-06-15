@@ -121,4 +121,9 @@ To run KinectFusion on a dataset:
    python run_dataset.py
    ```
 
----
+
+
+## References
+ * [KinectFusion: Real-Time Dense Surface Mapping and Tracking (ISMAR 2011)](https://www.microsoft.com/en-us/research/wp-content/uploads/2016/02/ismar2011.pdf)
+ * [Andy Zeng's tsdf-fusion-python](https://github.com/andyzeng/tsdf-fusion-python).
+ * [Jingwen Wang's KinecFusion implementation using Pytorch](https://github.com/JingwenWang95/KinectFusion).
