@@ -11,7 +11,7 @@ This repository contains an re-implementation of KinectFusion using Pytorch
 
 <div align="center">
   <div style="display: inline-block; text-align: center; margin: 0 10px;">
-    <img src="assets/frieburg_desk_2.png" alt="Mesh Preview 1" width="340" height="240"/><br/>
+    <img src="assets/frieburg_desk_1.png" alt="Mesh Preview 1" width="340" height="240"/><br/>
   </div>
   <div style="display: inline-block; text-align: center; margin: 0 10px;">
     <img src="assets/frieburg_desk_2.png" alt="Mesh Preview 2" width="340" height="240"/><br/>
